@@ -82,11 +82,25 @@ def normalize_messages(prompt_messages: Sequence) -> list[dict]:
     ]
 
 
+def parse_extra_headers(raw: str) -> dict[str, str]:
+    """凭据 extra_headers_json → 池级静态 header；非法输入静默忽略。"""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items() if v is not None}
+
+
 def build_headers(credentials: dict, hint) -> dict[str, str]:
     headers: dict[str, str] = {
         "Authorization": f"Bearer {credentials.get('api_key', '')}",
         "Content-Type": "application/json",
     }
+    headers.update(parse_extra_headers(credentials.get("extra_headers_json", "")))
     if credentials.get("emit_header", "true").strip().lower() != "false":
         headers[AGENT_HINT_HEADER] = encode_agent_hint(hint)
     return headers

@@ -58,6 +58,15 @@ model_credential_schema:
       placeholder:
         en_US: '{"priority":{"level":3,"reason":"user_waiting"},"prediction":{"output_tokens":300}}'
         zh_Hans: '{"priority":{"level":3,"reason":"user_waiting"},"prediction":{"output_tokens":300}}'
+    - variable: extra_headers_json
+      label:
+        en_US: Extra Headers (JSON)
+        zh_Hans: 附加 Headers (JSON)
+      type: text-input
+      required: false
+      placeholder:
+        en_US: '{"X-Agent-Pool": "my-pool"}'
+        zh_Hans: '{"X-Agent-Pool": "my-pool"}'
     - variable: hint_service_url
       label:
         en_US: Hint Service URL (optional)
