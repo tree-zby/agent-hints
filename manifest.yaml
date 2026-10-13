@@ -1,4 +1,4 @@
-version: 0.1.2
+version: 0.1.3
 type: plugin
 author: tree-zby
 name: agent-hints
@@ -23,7 +23,7 @@ plugins:
   models:
     - "provider/agent-hints.yaml"
 meta:
-  version: 0.1.2
+  version: 0.1.3
   minimum_dify_version: 1.0.0
   arch:
     - amd64
