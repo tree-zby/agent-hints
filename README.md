@@ -66,7 +66,7 @@ strategy).
 Requests to endpoints that ignore unknown fields are unaffected; everything
 degrades to a standard OpenAI-compatible call.
 
-## Hint service contract
+## Hint service (optional)
 
 `GET {base}/v1/hints?prefix_id={hash}&user={user}&model={model}` →
 `200 OK` with any partial AgentHint JSON object (unknown fields ignored), e.g.:
@@ -84,6 +84,30 @@ degrades to a standard OpenAI-compatible call.
 
 Any non-200, timeout (default 2s, credential `hint_service_timeout`), or
 malformed body is treated as "no hints this time".
+
+### Reference implementation
+
+A zero-dependency reference service ships in this repository under
+[`server/`](server/) (not part of the packaged plugin). It exposes:
+
+- `GET /v1/hints?prefix_id=…` — query (returns the registered partial hints)
+- `POST /v1/hints` — register/update entries
+  (`{"entries": [{"prefix_id": …, "hint": {…partial AgentHint…}}]}`, deep-merged)
+- `POST /agent-status` — lifecycle status sink
+- `GET /healthz`
+
+Deploy it anywhere the plugin can reach (same host, sidecar, or cluster
+service) and set the `hint_service_url` credential:
+
+```bash
+python -m hint_service --port 9200            # in-memory store
+python -m hint_service --port 9200 --store hints.json  # JSON file store
+```
+
+Typical producers: your scheduling layer, CI pipelines, or compile-time tooling
+that knows per-node metadata (register entries keyed by the same prefix hash
+the plugin derives). The plugin merges the response with highest precedence
+and silently skips the tier when the service is unreachable.
 
 ## Privacy
 
