@@ -1,0 +1,149 @@
+provider: agent-hints
+label:
+  en_US: Agent Hints
+  zh_Hans: Agent Hints
+description:
+  en_US: OpenAI-compatible inference endpoint with agentic inference hints.
+  zh_Hans: OpenAI 兼容推理端点，附加代理推理调度提示。
+icon_small:
+  en_US: icon.svg
+supported_model_types:
+  - llm
+configurate_methods:
+  - customizable-model
+model_credential_schema:
+  model:
+    label:
+      en_US: Model Name
+      zh_Hans: 模型名称
+    placeholder:
+      en_US: Enter full model name
+      zh_Hans: 输入模型全称
+  credential_form_schemas:
+    - variable: api_key
+      label:
+        en_US: API Key
+        zh_Hans: API Key
+      type: secret-input
+      required: false
+    - variable: endpoint_url
+      label:
+        en_US: API Base URL
+        zh_Hans: API Base URL
+      type: text-input
+      required: true
+      placeholder:
+        en_US: e.g. http://dynamo-frontend:8000/v1
+        zh_Hans: 例如 http://dynamo-frontend:8000/v1
+    - variable: context_size
+      label:
+        en_US: Context Size
+        zh_Hans: 上下文长度
+      type: text-input
+      required: true
+      default: "4096"
+    - variable: max_chunks
+      label:
+        en_US: Max Chunks
+        zh_Hans: 最大分块数
+      type: text-input
+      required: true
+      default: "1"
+    - variable: hints_json
+      label:
+        en_US: Static Hints (JSON)
+        zh_Hans: 静态 Hints (JSON)
+      type: text-input
+      required: false
+      placeholder:
+        en_US: '{"priority":{"level":3,"reason":"user_waiting"},"prediction":{"output_tokens":300}}'
+        zh_Hans: '{"priority":{"level":3,"reason":"user_waiting"},"prediction":{"output_tokens":300}}'
+    - variable: hint_service_url
+      label:
+        en_US: Hint Service URL (optional)
+        zh_Hans: Hint Service URL（可选）
+      type: text-input
+      required: false
+      placeholder:
+        en_US: http://hint-service:9200 — per-request dynamic hints, silently skipped when unreachable
+        zh_Hans: http://hint-service:9200 —— 请求时动态拉取 hints，不可达时静默降级
+    - variable: hint_service_timeout
+      label:
+        en_US: Hint Service Timeout (s)
+        zh_Hans: Hint Service 超时（秒）
+      type: text-input
+      required: false
+      default: "2.0"
+    - variable: hint_identity
+      label:
+        en_US: Session Identity Source
+        zh_Hans: 会话身份来源
+      type: select
+      required: false
+      default: "auto"
+      options:
+        - value: "auto"
+          label:
+            en_US: Auto (user, else prefix hash)
+            zh_Hans: 自动（user，缺省前缀哈希）
+        - value: "user"
+          label:
+            en_US: User only
+            zh_Hans: 仅 user
+        - value: "static"
+          label:
+            en_US: Static hints_json session_id
+            zh_Hans: 静态 hints_json 的 session_id
+    - variable: emit_header
+      label:
+        en_US: Emit X-Agent-Hint Header
+        zh_Hans: 下发 X-Agent-Hint 头
+      type: select
+      required: false
+      default: "true"
+      options:
+        - value: "true"
+          label:
+            en_US: "Yes"
+            zh_Hans: "是"
+        - value: "false"
+          label:
+            en_US: "No"
+            zh_Hans: "否"
+    - variable: emit_nvext
+      label:
+        en_US: Emit nvext.agent_hints (Dynamo)
+        zh_Hans: 下发 nvext.agent_hints（Dynamo）
+      type: select
+      required: false
+      default: "true"
+      options:
+        - value: "true"
+          label:
+            en_US: "Yes"
+            zh_Hans: "是"
+        - value: "false"
+          label:
+            en_US: "No"
+            zh_Hans: "否"
+    - variable: cache_pin
+      label:
+        en_US: Auto Pin First Message
+        zh_Hans: 自动 Pin 首条消息
+      type: select
+      required: false
+      default: "true"
+      options:
+        - value: "true"
+          label:
+            en_US: "Yes"
+            zh_Hans: "是"
+        - value: "false"
+          label:
+            en_US: "No"
+            zh_Hans: "否"
+extra:
+  python:
+    provider_source: provider/agent-hints.py
+    model_sources:
+      - models/llm/llm.py
