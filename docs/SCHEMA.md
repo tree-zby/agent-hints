@@ -57,7 +57,7 @@ absent fields (`exclude_none`), never fabricated values.
 | `session.epoch` | — | ✅ | context version after rewrites |
 | `priority` | ✅ node param + `hints_json` | ✅ | higher = more urgent |
 | `strict_priority` | — | ✅ (control plane) | agents never set it |
-| `cache_control` | ✅ auto `pin(end:1,message)` | ✅ | `cache_pin=false` disables the auto pin |
+| `cache_control` | ✅ auto `pin(end:1,message)`, optional explicit `ttl_s` via `cache_pin_ttl_s` | ✅ | `cache_pin=false` disables the auto pin |
 | `prediction.output_tokens` / `interval_ms` | ✅ node params (`osl` / `iat`) | ✅ | |
 | `prediction.latency_ms` / `remaining_calls` / `remaining_time_ms` / `expected_resume_s` | — | ✅ | measured statistics |
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |

@@ -100,6 +100,7 @@ Unreachable or malformed responses count as "no hints this time".
 | `emit_nvext` | true | Adds `nvext.agent_hints` to the request body. |
 | `emit_header` | true | Adds the `X-Agent-Hint` header. |
 | `cache_pin` | true | Pins the static system prefix (`cache_control`) unless hints provide one. |
+| `cache_pin_ttl_s` | *(empty)* | Arms the auto pin with an explicit `ttl_s` (e.g. `600`) so TTL-bounded retention consumers — such as the Motor KV Hint bridge — can map the declaration; empty keeps the permanent pin. Invalid values degrade to the permanent pin. |
 
 See [PRIVACY.md](PRIVACY.md). The plugin is stateless: it contacts only the
 configured inference endpoint and (optionally) the configured hint service,

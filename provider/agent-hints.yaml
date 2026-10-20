@@ -151,6 +151,15 @@ model_credential_schema:
           label:
             en_US: "No"
             zh_Hans: "否"
+    - variable: cache_pin_ttl_s
+      label:
+        en_US: Auto Pin TTL (seconds, optional)
+        zh_Hans: 自动 Pin TTL（秒，可选）
+      type: text-input
+      required: false
+      placeholder:
+        en_US: "e.g. 600 — arms the auto pin with an explicit TTL so TTL-bounded retention consumers (KV Hint bridge) can map it; empty keeps the permanent pin"
+        zh_Hans: "例如 600 —— 自动 Pin 携带显式 TTL，供有界保留消费方（KV Hint 桥）映射；留空保持永久 pin"
 extra:
   python:
     provider_source: provider/agent-hints.py

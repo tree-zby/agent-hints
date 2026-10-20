@@ -146,6 +146,36 @@ def test_cache_control_from_service_not_overwritten():
     assert hint.cache_control[0].type == "ephemeral"
 
 
+def test_cache_pin_ttl_s_arms_auto_pin():
+    """cache_pin_ttl_s arms the auto pin with an explicit TTL (KV-Hint-bridge consumable)."""
+    creds = dict(CREDS_BASE, cache_pin_ttl_s="600")
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
+    assert hint.cache_control == [hint_mod.CacheControlHint(
+        type="pin", ttl_s=600, range=hint_mod.HintRange(end=1, unit="message"))]
+
+
+def test_cache_pin_ttl_s_invalid_degrades_to_ttl_less_pin():
+    """Non-numeric / non-positive values fall back to the permanent pin, never raise."""
+    for raw in ("abc", "0", "-5", "", None):
+        creds = dict(CREDS_BASE)
+        if raw is not None:
+            creds["cache_pin_ttl_s"] = raw
+        hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
+        assert hint.cache_control == [hint_mod.CacheControlHint(
+            type="pin", ttl_s=None, range=hint_mod.HintRange(end=1, unit="message"))]
+
+
+def test_cache_pin_ttl_s_service_control_still_wins():
+    """A service-provided cache_control is never overwritten by the armed auto pin."""
+    def fake_fetch(url, timeout):
+        return {"cache_control": [{"type": "ephemeral", "ttl_s": 30}]}
+
+    creds = dict(CREDS_BASE, hint_service_url="http://hs", cache_pin_ttl_s="600")
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=fake_fetch)
+    assert hint.cache_control[0].type == "ephemeral"
+    assert hint.cache_control[0].ttl_s == 30
+
+
 # ---------------------------------------------------------------------------
 # nvext projection
 # ---------------------------------------------------------------------------

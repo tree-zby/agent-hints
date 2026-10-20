@@ -131,6 +131,17 @@ def service_query_url(base_url: str, *, prefix_id: str, user: str, model: str) -
     return f"{base_url.rstrip('/')}/v1/hints?{query}"
 
 
+def _auto_pin_ttl_s(raw: Any) -> Optional[int]:
+    """Positive integer TTL for the auto pin; invalid input degrades to a ttl-less pin."""
+    if raw is None:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def build_hint(
     prompt_messages: Any,
     model_parameters: dict,
@@ -203,12 +214,17 @@ def build_hint(
         if dynamic:
             deep_merge(merged, dynamic)
 
-    # cache_control auto pin (opt-out via credential cache_pin=false)
+    # cache_control auto pin (opt-out via credential cache_pin=false). An explicit
+    # cache_pin_ttl_s arms the pin with a TTL so TTL-bounded retention consumers
+    # (e.g. the Motor KV Hint bridge) can map the declaration; without it the pin
+    # stays permanent-by-default and such consumers keep it unmapped.
     if credentials.get("cache_pin", "true").strip().lower() != "false" \
             and "cache_control" not in merged:
-        merged["cache_control"] = [
-            {"type": "pin", "range": {"end": 1, "unit": "message"}}
-        ]
+        auto_pin: dict = {"type": "pin", "range": {"end": 1, "unit": "message"}}
+        ttl_s = _auto_pin_ttl_s(credentials.get("cache_pin_ttl_s"))
+        if ttl_s is not None:
+            auto_pin["ttl_s"] = ttl_s
+        merged["cache_control"] = [auto_pin]
 
     hint = AgentHint.model_validate(merged)
 
