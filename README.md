@@ -41,36 +41,46 @@ not inside model requests.
 
 ## The compatibility projection: nvext.agent_hints (NVIDIA Dynamo)
 
-The same data is additionally projected into the request body as
-`nvext.agent_hints`, compatible with
-[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) 1.0 agentic inference:
+The request body includes only `priority` in `nvext.agent_hints`, matching
+the [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) v1.5.1 request contract:
 
 ```json
-{ "prefix_id": "ea80ab9a028ad311", "priority": 99,
-  "osl": 256, "iat": 300, "latency_sensitivity": 2.5 }
+{ "nvext": { "agent_hints": { "priority": 3 } } }
 ```
 
-`prefix_id` is a content hash of the prompt's static prefix (KV-cache
-affinity); `priority` is converted from this plugin's "higher = more urgent"
-scale to Dynamo's inverted one. Endpoints that ignore unknown fields are
-unaffected.
+The merged `priority.level` is folded into the two-value domain `{1, 3}` and
+then sent unchanged: higher values have higher priority. There is no inversion
+or negation. The default posture is `3` / `user_waiting`; batch pools override
+it with `1` / `background` via credential `hints_json`.
+
+Dynamo v1.5.1 rejects unknown `AgentHints` fields. This plugin sends no
+`prefix_id`, `iat`, `osl` or `latency_sensitivity` in `nvext.agent_hints`,
+even when prediction metadata is configured. The prefix hash still identifies
+hint service queries and supplies the fallback `session.session_id` in the
+`X-Agent-Hint` header. Prediction metadata remains available in that header.
+
+Version note: the former `100 - level` inversion matched Dynamo v1.0.x client
+semantics. Since Dynamo v1.1.0 the unified contract is "higher value = higher
+priority", and clients must not negate the value (`nvext.agent_hints.priority`
+is forwarded with backend-specific polarity normalized inside Dynamo).
 
 ## Data sources (low → high precedence)
 
 1. **Auto defaults** — identity + `priority.level = 3` (`user_waiting`; the
    interactive posture — batch pools override via tier 2).
 2. **Credential `hints_json`** — a static partial AgentHint JSON.
-3. **Node completion params** — `priority / osl / iat / latency_sensitivity`
-   tunable per LLM node in the Dify workflow UI.
+3. **Node completion params** — `priority / osl / iat` tunable per LLM node
+   in the Dify workflow UI. `osl` and `iat` affect only the header.
 4. **Hint service** (optional) — per-request dynamic enrichment; see below.
 
 The emitted `priority.level` is folded into the **two-value domain {1, 3}**
 (v2 contract: `3` = user-intervened / admission-exempt, `1` = everything
 else; v1 legacy `{2, 4}` and out-of-domain values narrow without changing
-admission outcomes — see [docs/SCHEMA.md](docs/SCHEMA.md)).
+admission outcomes — see [docs/SCHEMA.md](docs/SCHEMA.md)). The folded level
+is what the header and the nvext `priority` carry.
 
-A fresh install is fully functional from tiers 1–3 (the scheduling basics +
-`prefix_id`); the optional hint service enriches the remaining fields
+A fresh install is fully functional from tiers 1–3 (priority and header
+metadata); the optional hint service enriches the remaining fields
 (`call_index`, `next_action`, measured statistics, derivation) without any
 plugin change. Outages degrade silently to a plain request.
 
@@ -80,8 +90,18 @@ plugin change. Outages degrade silently to a plain request.
    the `.difypkg` release asset).
 2. Add a model from the **Agent Hints** provider: set the OpenAI-compatible
    `endpoint_url` (e.g. a Dynamo frontend) and optionally an `api_key`.
-3. Bind the model in any workflow LLM node and tune the scheduling parameters
-   in the node's parameter panel.
+3. Bind the model in any workflow LLM node and tune priority and generation
+   parameters in the node's parameter panel.
+
+`temperature`, `max_tokens` and `top_p` are optional generation parameters.
+Supplied values go into the OpenAI-compatible request body; absent or `null`
+values are omitted. The plugin does not insert UI defaults for absent parameters.
+
+| Parameter | Range | UI default |
+|---|---|---|
+| `temperature` | 0–2 | 1.0 |
+| `max_tokens` | 1–configured context size | 512, capped by context size |
+| `top_p` | 0–1 | 1.0 |
 
 ## Optional hint service
 
@@ -103,7 +123,7 @@ Unreachable or malformed responses count as "no hints this time".
 
 | Credential | Default | Effect |
 |---|---|---|
-| `emit_nvext` | true | Adds `nvext.agent_hints` to the request body. |
+| `emit_nvext` | true | Adds `nvext.agent_hints` with only `priority`; false omits `nvext`. |
 | `emit_header` | true | Adds the `X-Agent-Hint` header. |
 | `cache_pin` | true | Pins the static system prefix (`cache_control`) unless hints provide one. |
 | `cache_pin_ttl_s` | *(empty)* | Arms the auto pin with an explicit `ttl_s` (e.g. `600`) so TTL-bounded retention consumers — such as the Motor KV Hint bridge — can map the declaration; empty keeps the permanent pin. Invalid values degrade to the permanent pin. |
@@ -116,7 +136,15 @@ prompt content to the hint service.
 ## Development
 
 ```bash
-python -m pytest tests/ -q     # 31 tests: schema golden (cross-language) + pipeline + service
+python -m pytest -q -p no:cacheprovider
+```
+
+Tests cover the schema golden vector, pipeline, hint service and serialized
+requests captured through the Dify model invocation path with a mock HTTP
+transport. To print the priority table and a full captured request body:
+
+```bash
+python -m tests.test_request_contract
 ```
 
 Field naming and wire encoding are pinned by a cross-language golden vector;

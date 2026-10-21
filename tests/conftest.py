@@ -1,4 +1,4 @@
-"""Shared test setup: dify_plugin stubs + module loading for models/llm."""
+"""Load the installed Dify model SDK without starting the plugin runtime."""
 from __future__ import annotations
 
 import importlib.util
@@ -10,49 +10,26 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _LLM_DIR = REPO_ROOT / "models" / "llm"
 
 
-def _install_dify_plugin_stubs() -> None:
+def _load_dify_model_sdk() -> None:
     if "dify_plugin" in sys.modules:
         return
-    dp = types.ModuleType("dify_plugin")
-    dp.ModelProvider = object
-
-    entities = types.ModuleType("dify_plugin.entities")
-    model_mod = types.ModuleType("dify_plugin.entities.model")
-    for name in ("AIModelEntity", "FetchFrom", "ModelPropertyKey", "ModelType", "ParameterRule"):
-        setattr(model_mod, name, type(name, (), {}))
-    message_mod = types.ModuleType("dify_plugin.entities.model.message")
-    message_mod.AssistantPromptMessage = type("AssistantPromptMessage", (), {})
-    llm_entities = types.ModuleType("dify_plugin.entities.model.llm")
-    for name in ("LLMResult", "LLMResultChunk", "LLMResultChunkDelta", "LLMUsage"):
-        setattr(llm_entities, name, type(name, (), {}))
-
-    errors = types.ModuleType("dify_plugin.errors")
-    errors_model = types.ModuleType("dify_plugin.errors.model")
-    errors_model.CredentialsValidateFailedError = type(
-        "CredentialsValidateFailedError", (Exception,), {}
-    )
-
-    interfaces = types.ModuleType("dify_plugin.interfaces")
-    interfaces_model = types.ModuleType("dify_plugin.interfaces.model")
-    large_language_model = types.ModuleType("dify_plugin.interfaces.model.large_language_model")
-    large_language_model.LargeLanguageModel = object
-
-    dp.entities = entities
-    entities.model = model_mod
-    model_mod.llm = llm_entities
-    model_mod.message = message_mod
-    dp.errors = errors
-    errors.model = errors_model
-    dp.interfaces = interfaces
-    interfaces.model = interfaces_model
-    interfaces_model.large_language_model = large_language_model
-
-    for module in (dp, entities, model_mod, message_mod, llm_entities, errors,
-                   errors_model, interfaces, interfaces_model, large_language_model):
-        sys.modules[module.__name__] = module
+    spec = importlib.util.find_spec("dify_plugin")
+    if spec is None or spec.origin is None:
+        raise ImportError("Tests require the installed dify_plugin SDK")
+    sdk_root = Path(spec.origin).parent
+    # Skip package initializers that load plugin configuration or patch sockets.
+    # Entities, parameter validation and LargeLanguageModel.invoke stay real.
+    for suffix in ("", ".interfaces", ".interfaces.model"):
+        name = "dify_plugin" + suffix
+        module = types.ModuleType(name)
+        module.__path__ = [str(sdk_root.joinpath(*suffix.strip(".").split(".")))]
+        sys.modules[name] = module
+        if suffix:
+            parent, _, child = name.rpartition(".")
+            setattr(sys.modules[parent], child, module)
 
 
-_install_dify_plugin_stubs()
+_load_dify_model_sdk()
 _pkg = types.ModuleType("agent_hints_pkg")
 _pkg.__path__ = [str(_LLM_DIR)]
 sys.modules["agent_hints_pkg"] = _pkg
