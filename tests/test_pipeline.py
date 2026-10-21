@@ -196,33 +196,38 @@ def test_cache_pin_ttl_s_service_control_still_wins():
 # ---------------------------------------------------------------------------
 # nvext projection
 # ---------------------------------------------------------------------------
-def test_nvext_defaults_and_prefix_id():
+def test_nvext_defaults_and_header_identity():
     hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {}, dict(CREDS_BASE))
-    assert nvext == {"prefix_id": pipeline_mod.prefix_hash([sys_msg("s")]),
-                     "priority": 97, "osl": 512, "iat": 250,
-                     "latency_sensitivity": 1.0}
+    assert nvext == {"priority": 3}
+    assert hint.session.session_id == pipeline_mod.prefix_hash([sys_msg("s")])
 
 
-def test_nvext_priority_inverted():
-    # our scale: higher = more urgent; Dynamo: lower = more priority.
-    # Levels fold to {1, 3} first, so the projection is {99, 97}.
-    hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {"priority": 90},
+@pytest.mark.parametrize("priority, expected", [
+    (0, 1), (1, 1), (2, 1), (3, 3), (4, 3), (5, 3), (10, 3), (90, 3),
+    ("0", 1), ("5", 3),
+])
+def test_nvext_priority_folded_and_sent_unchanged(priority, expected):
+    # The two-value fold happens once at the pipeline exit; nvext carries the
+    # folded level unchanged (no inversion — Dynamo v1.1.0+ semantics).
+    hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {"priority": priority},
                                           dict(CREDS_BASE))
-    assert nvext["priority"] == 97  # level 90 folds to 3
-    hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {"priority": 0},
-                                          dict(CREDS_BASE))
-    assert nvext["priority"] == 99  # level 0 folds to 1
+    assert nvext == {"priority": expected}
+    assert type(nvext["priority"]) is int
+    assert hint.priority.level == expected
 
 
-def test_nvext_reflects_service_prediction():
+def test_service_prediction_stays_in_header():
     def fake_fetch(url, timeout):
         return {"prediction": {"output_tokens": 42, "interval_ms": 17}}
 
     hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {},
                                           dict(CREDS_BASE, hint_service_url="http://hs"),
                                           fetch_fn=fake_fetch)
-    assert nvext["osl"] == 42
-    assert nvext["iat"] == 17
+    assert nvext == {"priority": 3}
+    headers = llm_mod.build_headers(dict(CREDS_BASE), hint)
+    decoded = hint_mod.decode_agent_hint(headers["X-Agent-Hint"])
+    assert decoded.prediction.output_tokens == 42
+    assert decoded.prediction.interval_ms == 17
 
 
 # ---------------------------------------------------------------------------
@@ -243,10 +248,12 @@ def test_build_headers_emit_header_off():
 
 
 def test_build_body_nvext_toggle():
-    messages = [{"role": "system", "content": "s"}]
-    body = llm_mod.build_body("m", messages, {}, None, True, nvext={"prefix_id": "x"})
-    assert body["nvext"] == {"agent_hints": {"prefix_id": "x"}}
-    body = llm_mod.build_body("m", messages, {}, None, True, nvext={"prefix_id": "x"},
+    prompt_messages = [sys_msg("s")]
+    _, nvext = pipeline_mod.build_hint(prompt_messages, {}, dict(CREDS_BASE))
+    messages = llm_mod.normalize_messages(prompt_messages)
+    body = llm_mod.build_body("m", messages, {}, None, True, nvext=nvext)
+    assert body["nvext"] == {"agent_hints": {"priority": 3}}
+    body = llm_mod.build_body("m", messages, {}, None, True, nvext=nvext,
                               emit_nvext=False)
     assert "nvext" not in body
 
@@ -254,6 +261,6 @@ def test_build_body_nvext_toggle():
 def test_build_body_hints_do_not_pollute_messages():
     messages = [{"role": "system", "content": "clean prompt"}]
     body = llm_mod.build_body("m", messages, {"temperature": 0.5}, ["stop1"], True,
-                              nvext={"prefix_id": "x"})
+                              nvext={"priority": 1})
     assert body["messages"] == messages  # prompt stays untouched
     assert body["stop"] == ["stop1"]

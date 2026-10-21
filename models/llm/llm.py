@@ -4,13 +4,13 @@ Standalone Dify model plugin. Attaches scheduling hints to every model
 request so hint-aware inference gateways (e.g. NVIDIA Dynamo) can do
 priority routing, KV-cache affinity and capacity planning:
 
-- nvext.agent_hints (request body, Dynamo-compatible projection; default on)
+- nvext.agent_hints (request body, priority only for Dynamo v1.5.1; default on)
 - X-Agent-Hint header (full agreed schema, see docs/SCHEMA.md; optional)
 
 Data sources (four tiers, low -> high precedence):
   1. auto defaults        (identity + priority level 3 / user_waiting)
   2. credential hints_json (static partial AgentHint)
-  3. node completion_params (priority / osl / iat / latency_sensitivity)
+  3. node completion_params (priority / osl / iat; predictions go in the header)
   4. hint service          (GET hint_service_url at request time; the service
      may return any partial AgentHint — session enrichment, prediction stats,
      next_action — which is merged verbatim into the final object)
@@ -30,7 +30,6 @@ from decimal import Decimal
 from typing import Any, Optional, Union
 
 import httpx
-from dify_plugin import ModelProvider
 from dify_plugin.entities.model import (
     AIModelEntity,
     FetchFrom,
@@ -257,13 +256,15 @@ class AgentHintsModel(LargeLanguageModel):
         return {}
 
     def get_customizable_model_schema(self, model: str, credentials: dict) -> AIModelEntity:
-        def _rule(variable, label, ptype, default, help_text, vmin=None, vmax=None):
+        context_size = int(credentials.get("context_size", "4096"))
+
+        def _rule(variable, label, ptype, default, help_text, vmin=None, vmax=None,
+                  zh_help=None):
             rule = ParameterRule(
                 name=variable,
-                variable=variable,
                 label={"en_US": label, "zh_Hans": label},
                 type=ptype,
-                help={"en_US": help_text, "zh_Hans": help_text},
+                help={"en_US": help_text, "zh_Hans": zh_help or help_text},
                 required=False,
                 default=default,
             )
@@ -281,18 +282,22 @@ class AgentHintsModel(LargeLanguageModel):
             fetch_from=FetchFrom.CUSTOMIZABLE_MODEL,
             model_properties={
                 ModelPropertyKey.MODE: credentials.get("mode", "chat"),
-                ModelPropertyKey.CONTEXT_SIZE: int(credentials.get("context_size", "4096")),
+                ModelPropertyKey.CONTEXT_SIZE: context_size,
             },
             parameter_rules=[
+                _rule("temperature", "Temperature", "float", 1.0,
+                      "Controls randomness in generated text.", 0.0, 2.0),
+                _rule("max_tokens", "Max Tokens", "int", min(512, context_size),
+                      "Maximum number of tokens to generate.", 1, context_size),
+                _rule("top_p", "Top P", "float", 1.0,
+                      "Cumulative probability cutoff for nucleus sampling.", 0.0, 1.0),
                 _rule("priority", "Scheduling Priority", "int", 1,
-                      "Higher = more urgent. Converted to Dynamo's inverted "
-                      "priority scale in nvext.agent_hints.", 0, 100),
+                      "Higher values have higher priority; sent unchanged to Dynamo.",
+                      0, 100, zh_help="数值越大越优先，原样发送给 Dynamo"),
                 _rule("osl", "Expected Output Tokens (osl)", "int", 512,
-                      "Expected output sequence length for capacity planning.", 1, 100000),
+                      "Expected output sequence length in X-Agent-Hint only.", 1, 100000),
                 _rule("iat", "Expected Inter-arrival (ms)", "int", 250,
-                      "Expected request inter-arrival time for load anticipation.",
+                      "Expected request inter-arrival time in X-Agent-Hint only.",
                       0, 600000),
-                _rule("latency_sensitivity", "Latency Sensitivity", "float", 1.0,
-                      "Higher values get priority routing.", 0.0, 100.0),
             ],
         )

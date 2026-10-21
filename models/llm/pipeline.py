@@ -3,7 +3,7 @@
 Merge order (low -> high precedence; higher tiers override per-field):
   1. auto defaults        (identity + priority level 3 / user_waiting)
   2. credential static    (hints_json: partial AgentHint JSON)
-  3. node parameters      (priority / osl / iat / latency_sensitivity completion_params)
+  3. node parameters      (priority / osl / iat completion_params)
   4. hint service         (GET hint_service_url at request time; silent degradation)
 
 Output priority level is folded into the two-value domain {1, 3} (v2 contract:
@@ -13,14 +13,13 @@ normalize_priority_level).
 Outputs:
   - AgentHint object -> X-Agent-Hint header (UTF-8 JSON -> base64url), full
     agreed schema (see docs/SCHEMA.md)
-  - nvext.agent_hints request-body projection (NVIDIA Dynamo compatible:
-    prefix_id / priority / osl / iat / latency_sensitivity)
+  - nvext.agent_hints request-body projection (NVIDIA Dynamo v1.5.1:
+    priority only, higher values have higher priority)
 
 Identity (session.session_id): `user` invocation param when present, else the
 content-derived prefix hash, else a credential-provided static id. The prefix
-hash (sha256 over the first system message, hex[:16]) is also used as the
-nvext prefix_id — KV-cache affinity is a prefix-content property, not a
-session property.
+hash (sha256 over the first system message, hex[:16]) is also used as
+prefix_id in hint service queries. It is not sent in nvext.agent_hints.
 """
 from __future__ import annotations
 
@@ -30,12 +29,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
 
-from .hint import AGENT_HINT_HEADER, AgentHint
-
-NVEXT_PRIORITY_CEILING = 100
-DEFAULT_OSL = 512
-DEFAULT_IAT = 250
-DEFAULT_LATENCY_SENSITIVITY = 1.0
+from .hint import AgentHint
 
 FetchFn = Callable[[str, float], Optional[dict]]
 
@@ -202,7 +196,7 @@ def build_hint(
     # tier 2: credential static hints_json (partial AgentHint)
     deep_merge(merged, _parse_hints_json(credentials.get("hints_json")))
 
-    # tier 3: node completion_params (Dynamo-aligned knobs)
+    # tier 3: node completion_params (priority plus header prediction metadata)
     node_priority = _as_int(model_parameters.get("priority"))
     if node_priority is not None:
         merged.setdefault("priority", {})["level"] = node_priority
@@ -212,11 +206,6 @@ def build_hint(
         merged.setdefault("prediction", {})["output_tokens"] = node_osl
     if node_iat is not None:
         merged.setdefault("prediction", {})["interval_ms"] = node_iat
-    latency_sensitivity = _as_float(model_parameters.get("latency_sensitivity"))
-    if latency_sensitivity is None:
-        latency_sensitivity = _as_float(credentials.get("latency_sensitivity"))
-    if latency_sensitivity is None:
-        latency_sensitivity = DEFAULT_LATENCY_SENSITIVITY
 
     # tier 4: hint service (dynamic enrichment; silent degradation)
     service_url = (credentials.get("hint_service_url") or "").strip()
@@ -261,16 +250,7 @@ def build_hint(
 
     hint = AgentHint.model_validate(merged)
 
-    # nvext projection (Dynamo-compatible; priority scale inverted)
-    level = merged.get("priority", {}).get("level")
-    level = _as_int(level) if level is not None else 1
-    nvext_priority = max(0, NVEXT_PRIORITY_CEILING - (level if level is not None else 1))
-    prediction = merged.get("prediction") or {}
-    nvext = {
-        "prefix_id": prefix_id,
-        "priority": nvext_priority,
-        "osl": _as_int(prediction.get("output_tokens")) or DEFAULT_OSL,
-        "iat": _as_int(prediction.get("interval_ms")) or DEFAULT_IAT,
-        "latency_sensitivity": latency_sensitivity,
-    }
-    return hint, nvext
+    # Dynamo v1.5.1 rejects unknown AgentHints fields. Send only priority;
+    # keep prediction metadata and session identity in X-Agent-Hint.
+    level = hint.priority.level if hint.priority is not None else 1
+    return hint, {"priority": int(level)}

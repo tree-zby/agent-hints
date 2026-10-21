@@ -76,15 +76,30 @@ else `→ 1`) at pipeline output, so admission outcomes never change.
 
 ## nvext projection (request body, Dynamo-compatible)
 
-`nvext.agent_hints` is a **projection** of the same data for NVIDIA Dynamo:
+`nvext.agent_hints` contains only `priority` for NVIDIA Dynamo v1.5.1:
 
 | nvext field | source |
 |---|---|
-| `prefix_id` | content hash of the first system message (KV-cache affinity) |
-| `priority` | `100 − priority.level` (Dynamo's scale is inverted: lower = more priority) |
-| `osl` | `prediction.output_tokens` (default 512) |
-| `iat` | `prediction.interval_ms` (default 250) |
-| `latency_sensitivity` | node param / credential (default 1.0) |
+| `priority` | merged `priority.level`, folded into `{1, 3}` and sent unchanged as an integer (default `3` / `user_waiting`); higher values have higher priority |
+
+There is no inversion or negation. The fold happens once, at the pipeline
+exit, before both wire formats: legacy `{2, 4}` map to the nearest value
+(`2 -> 1`, `4 -> 3`) and any other integer folds by the admission line
+(`>= 3 -> 3`, else `-> 1`), so admission outcomes are unchanged.
+
+Dynamo v1.5.1 accepts `priority`, `strict_priority`, `osl`,
+`speculative_prefill` and `latency_sensitivity`, and rejects unknown fields.
+This plugin sends only `priority`; `emit_nvext=false` omits `nvext` entirely.
+
+`prefix_id` and `iat` are not Dynamo `AgentHints` fields. The prefix hash
+remains in hint service queries and as the fallback `session.session_id` in
+the header. `osl` and `iat` node parameters still populate the header's
+`prediction.output_tokens` and `prediction.interval_ms`; neither is projected
+into `nvext.agent_hints`. `latency_sensitivity` is no longer exposed or sent.
+
+Version note: the former `100 - level` inversion matched Dynamo v1.0.x client
+semantics. Since v1.1.0 the unified contract is "higher value = higher
+priority" and clients must not negate it.
 
 Field names, types and encoding are contract-stable: any gateway built for
 the agreed schema decodes this header unchanged.
