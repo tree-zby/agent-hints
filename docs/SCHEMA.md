@@ -65,15 +65,23 @@ absent fields (`exclude_none`), never fabricated values.
 
 ## nvext projection (request body, Dynamo-compatible)
 
-`nvext.agent_hints` is a **projection** of the same data for NVIDIA Dynamo:
+`nvext.agent_hints` contains only `priority` for NVIDIA Dynamo v1.5.1:
 
 | nvext field | source |
 |---|---|
-| `prefix_id` | content hash of the first system message (KV-cache affinity) |
-| `priority` | `100 − priority.level` (Dynamo's scale is inverted: lower = more priority) |
-| `osl` | `prediction.output_tokens` (default 512) |
-| `iat` | `prediction.interval_ms` (default 250) |
-| `latency_sensitivity` | node param / credential (default 1.0) |
+| `priority` | merged `priority.level`, sent unchanged as an integer (default 1); higher values have higher priority |
+
+There is no inversion or negation: node values 0, 5 and 10 remain 0, 5 and 10
+unless a higher-precedence hint service value overrides them.
+Dynamo v1.5.1 accepts `priority`, `strict_priority`, `osl`,
+`speculative_prefill` and `latency_sensitivity`, and rejects unknown fields.
+This plugin sends only `priority`; `emit_nvext=false` omits `nvext` entirely.
+
+`prefix_id` and `iat` are not Dynamo `AgentHints` fields. The prefix hash
+remains in hint service queries and as the fallback `session.session_id` in
+the header. `osl` and `iat` node parameters still populate the header's
+`prediction.output_tokens` and `prediction.interval_ms`; neither is projected
+into `nvext.agent_hints`. `latency_sensitivity` is no longer exposed or sent.
 
 Field names, types and encoding are contract-stable: any gateway built for
 the agreed schema decodes this header unchanged.
