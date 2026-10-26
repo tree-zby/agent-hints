@@ -57,11 +57,17 @@ unaffected.
 
 ## Data sources (low → high precedence)
 
-1. **Auto defaults** — identity + `priority.level = 1`.
+1. **Auto defaults** — identity + `priority.level = 3` (`user_waiting`; the
+   interactive posture — batch pools override via tier 2).
 2. **Credential `hints_json`** — a static partial AgentHint JSON.
 3. **Node completion params** — `priority / osl / iat / latency_sensitivity`
    tunable per LLM node in the Dify workflow UI.
 4. **Hint service** (optional) — per-request dynamic enrichment; see below.
+
+The emitted `priority.level` is folded into the **two-value domain {1, 3}**
+(v2 contract: `3` = user-intervened / admission-exempt, `1` = everything
+else; v1 legacy `{2, 4}` and out-of-domain values narrow without changing
+admission outcomes — see [docs/SCHEMA.md](docs/SCHEMA.md)).
 
 A fresh install is fully functional from tiers 1–3 (the scheduling basics +
 `prefix_id`); the optional hint service enriches the remaining fields

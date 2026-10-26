@@ -60,10 +60,27 @@ def test_identity_static_from_hints_json():
 # ---------------------------------------------------------------------------
 # four-tier merge
 # ---------------------------------------------------------------------------
-def test_defaults_priority_level_1_and_no_extra_fields():
+def test_defaults_two_level_baseline_and_no_extra_fields():
+    # v2 tier-1 baseline: interactive posture (3 / user_waiting)
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, dict(CREDS_BASE))
-    assert hint.priority.level == 1
+    assert hint.priority.level == 3
+    assert hint.priority.reason == "user_waiting"
     assert hint.prediction is None
+
+
+def test_priority_level_folds_to_two_value_domain():
+    cases = {1: 1, 2: 1, 3: 3, 4: 3, 0: 1, -5: 1, 7: 3}
+    for level, expected in cases.items():
+        hint, _ = pipeline_mod.build_hint([sys_msg("s")], {"priority": level},
+                                          dict(CREDS_BASE))
+        assert hint.priority.level == expected
+
+
+def test_fold_keeps_reason_from_lower_tier():
+    creds = dict(CREDS_BASE, hints_json=json.dumps({"priority": {"reason": "background"}}))
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {"priority": 4}, creds)
+    assert hint.priority.level == 3
+    assert hint.priority.reason == "background"
 
 
 def test_credential_hints_json_merged():
@@ -79,7 +96,7 @@ def test_credential_hints_json_merged():
 def test_invalid_hints_json_silently_ignored():
     creds = dict(CREDS_BASE, hints_json="not-json{{{")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
-    assert hint.priority.level == 1
+    assert hint.priority.level == 3
 
 
 def test_node_params_override_credentials():
@@ -87,7 +104,7 @@ def test_node_params_override_credentials():
         {"priority": {"level": 3}, "prediction": {"output_tokens": 300}}))
     params = {"priority": 7, "osl": 128, "iat": 90}
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], params, creds)
-    assert hint.priority.level == 7
+    assert hint.priority.level == 3  # node param 7 folds into the two-value domain
     assert hint.prediction.output_tokens == 128
     assert hint.prediction.interval_ms == 90
 
@@ -115,14 +132,14 @@ def test_service_down_degrades_silently():
 
     creds = dict(CREDS_BASE, hint_service_url="http://hs")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=broken_fetch)
-    assert hint.priority.level == 1
+    assert hint.priority.level == 3
 
 
 def test_service_none_response_degrades():
     creds = dict(CREDS_BASE, hint_service_url="http://hs")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds,
                                       fetch_fn=lambda url, t: None)
-    assert hint.priority.level == 1
+    assert hint.priority.level == 3
 
 
 # ---------------------------------------------------------------------------
@@ -182,18 +199,19 @@ def test_cache_pin_ttl_s_service_control_still_wins():
 def test_nvext_defaults_and_prefix_id():
     hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {}, dict(CREDS_BASE))
     assert nvext == {"prefix_id": pipeline_mod.prefix_hash([sys_msg("s")]),
-                     "priority": 99, "osl": 512, "iat": 250,
+                     "priority": 97, "osl": 512, "iat": 250,
                      "latency_sensitivity": 1.0}
 
 
 def test_nvext_priority_inverted():
-    # our scale: higher = more urgent; Dynamo: lower = more priority
+    # our scale: higher = more urgent; Dynamo: lower = more priority.
+    # Levels fold to {1, 3} first, so the projection is {99, 97}.
     hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {"priority": 90},
                                           dict(CREDS_BASE))
-    assert nvext["priority"] == 10
+    assert nvext["priority"] == 97  # level 90 folds to 3
     hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {"priority": 0},
                                           dict(CREDS_BASE))
-    assert nvext["priority"] == 100
+    assert nvext["priority"] == 99  # level 0 folds to 1
 
 
 def test_nvext_reflects_service_prediction():
