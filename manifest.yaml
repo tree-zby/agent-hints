@@ -1,13 +1,13 @@
-version: 0.1.5
+﻿version: 0.1.5
 type: plugin
 author: tree-zby
 name: agent-hints
 label:
   en_US: Agent Hints (Dynamo-compatible)
-  zh_Hans: Agent Hints（调度提示）
+  zh_Hans: Agent Hints锛堣皟搴︽彁绀猴級
 description:
-  en_US: OpenAI-compatible model provider that attaches agentic inference hints to every request — NVIDIA Dynamo nvext.agent_hints compatible, plus an optional full-schema scheduling hint header (X-Agent-Hint) for hint-aware gateways.
-  zh_Hans: OpenAI 兼容模型插件，为每个请求附加代理推理调度提示——兼容 NVIDIA Dynamo nvext.agent_hints，并可选下发完整 schema 的调度提示头（X-Agent-Hint）。
+  en_US: OpenAI-compatible model provider that attaches agentic inference hints to every request 鈥?NVIDIA Dynamo nvext.agent_hints compatible, plus an optional full-schema scheduling hint header (X-Agent-Hint) for hint-aware gateways.
+  zh_Hans: OpenAI 鍏煎妯″瀷鎻掍欢锛屼负姣忎釜璇锋眰闄勫姞浠ｇ悊鎺ㄧ悊璋冨害鎻愮ず鈥斺€斿吋瀹?NVIDIA Dynamo nvext.agent_hints锛屽苟鍙€変笅鍙戝畬鏁?schema 鐨勮皟搴︽彁绀哄ご锛圶-Agent-Hint锛夈€?
 created_at: "2026-10-13T00:00:00Z"
 repo: https://github.com/tree-zby/agent-hints
 contact: 1454192575@qq.com

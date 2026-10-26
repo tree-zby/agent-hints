@@ -1,10 +1,14 @@
 """Agent hints data pipeline: four-tier merge -> AgentHint -> dual wire formats.
 
 Merge order (low -> high precedence; higher tiers override per-field):
-  1. auto defaults        (identity + priority level 1)
+  1. auto defaults        (identity + priority level 3 / user_waiting)
   2. credential static    (hints_json: partial AgentHint JSON)
   3. node parameters      (priority / osl / iat / latency_sensitivity completion_params)
   4. hint service         (GET hint_service_url at request time; silent degradation)
+
+Output priority level is folded into the two-value domain {1, 3} (v2 contract:
+3 = user-intervened / admission-exempt, 1 = everything else; see
+normalize_priority_level).
 
 Outputs:
   - AgentHint object -> X-Agent-Hint header (UTF-8 JSON -> base64url), full
@@ -34,6 +38,24 @@ DEFAULT_IAT = 250
 DEFAULT_LATENCY_SENSITIVITY = 1.0
 
 FetchFn = Callable[[str, float], Optional[dict]]
+
+
+def normalize_priority_level(level: int) -> int:
+    """Fold a priority level into the two-value domain {1, 3}.
+
+    v2 cross-harness contract: 3 = user-intervened (admission-exempt),
+    1 = everything else. The numbers are contract anchors (the Motor
+    admission line is 3), not tiers. v1 legacy {2, 4} map to the nearest
+    value; any other integer folds by the admission line (>=3 -> 3,
+    else -> 1) — admission outcomes are unchanged.
+    """
+    if level in (1, 3):
+        return level
+    if level == 2:
+        return 1
+    if level == 4:
+        return 3
+    return 3 if level >= 3 else 1
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -172,7 +194,9 @@ def build_hint(
 
     merged: dict = {
         "session": {"session_id": session_id},
-        "priority": {"level": 1},
+        # tier-1 baseline: interactive deployments (the default posture —
+        # someone is waiting); batch pools override via tier-2 hints_json.
+        "priority": {"level": 3, "reason": "user_waiting"},
     }
 
     # tier 2: credential static hints_json (partial AgentHint)
@@ -225,6 +249,15 @@ def build_hint(
         if ttl_s is not None:
             auto_pin["ttl_s"] = ttl_s
         merged["cache_control"] = [auto_pin]
+
+    # v2 two-value fold: priority.level ∈ {1, 3} (3 = user-intervened).
+    # Applied after all tiers so legacy {2, 4} and out-of-domain node params
+    # or service values narrow without changing admission outcomes.
+    priority_block = merged.get("priority")
+    if isinstance(priority_block, dict):
+        level = priority_block.get("level")
+        if isinstance(level, int) and not isinstance(level, bool):
+            priority_block["level"] = normalize_priority_level(level)
 
     hint = AgentHint.model_validate(merged)
 

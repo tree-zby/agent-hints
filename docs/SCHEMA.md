@@ -63,6 +63,17 @@ absent fields (`exclude_none`), never fabricated values.
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |
 | `agent_status` | — | — | **status event channel** (§4), not the request header |
 
+## Two-value level domain (v2)
+
+`priority.level` is contracted to **{1, 3}**: `3` = user-intervened
+(admission-exempt), `1` = everything else. The numbers are contract anchors —
+the only semantics is the comparison against the inference-side admission
+level (= 3), not tiers. v1 legacy `{2, 4}` fold to the nearest value
+(`2→1`, `4→3`); any other integer folds by the admission line (`>=3 → 3`,
+else `→ 1`) at pipeline output, so admission outcomes never change.
+`reason` remains the audit vocabulary
+(`user_waiting` / `critical_path` / `background`).
+
 ## nvext projection (request body, Dynamo-compatible)
 
 `nvext.agent_hints` is a **projection** of the same data for NVIDIA Dynamo:

@@ -8,12 +8,16 @@ priority routing, KV-cache affinity and capacity planning:
 - X-Agent-Hint header (full agreed schema, see docs/SCHEMA.md; optional)
 
 Data sources (four tiers, low -> high precedence):
-  1. auto defaults        (identity + priority level 1)
+  1. auto defaults        (identity + priority level 3 / user_waiting)
   2. credential hints_json (static partial AgentHint)
   3. node completion_params (priority / osl / iat / latency_sensitivity)
   4. hint service          (GET hint_service_url at request time; the service
      may return any partial AgentHint — session enrichment, prediction stats,
      next_action — which is merged verbatim into the final object)
+
+The emitted priority.level is folded into the two-value domain {1, 3}
+(3 = user-intervened; v1 legacy {2, 4} and out-of-domain values narrow
+without changing admission outcomes).
 
 No external tooling is required: with zero configuration the plugin emits
 safe defaults and degrades to a plain request if anything fails.
