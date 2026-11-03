@@ -153,7 +153,8 @@ def test_generation_parameter_schema_uses_real_sdk_rules():
         assert rule.type == ptype
         assert not rule.required
         assert rule.min <= rule.default <= rule.max
-    assert rules["priority"].help.zh_hans == "数值越大越优先，原样发送给 Dynamo"
+    assert rules["priority"].help.zh_hans == "数值越大越优先，折叠为 {1,3}；编译期步骤优先级优先"
+    assert rules["priority"].default == 3
     assert "latency_sensitivity" not in rules
 
 

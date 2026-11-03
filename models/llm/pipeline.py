@@ -25,10 +25,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
 
+from .cache_policy import (
+    build_cache_control,
+    derive_cache_control,
+    estimate_tokens,
+    logical_message_count,
+    prefix_rewritten,
+)
 from .hint import AgentHint
 
 FetchFn = Callable[[str, float], Optional[dict]]
@@ -173,6 +181,7 @@ def build_hint(
     """
     prompt_messages = prompt_messages or []
     prefix_id = prefix_hash(prompt_messages)
+    now_ms = int(time.time() * 1000)
 
     # tier 1: auto defaults
     identity_mode = (credentials.get("hint_identity") or "auto").strip()
@@ -186,11 +195,27 @@ def build_hint(
     else:  # auto
         session_id = (user or "").strip() or prefix_id
 
+    # tier-1 baseline: derived from the request itself (the plugin's own
+    # capability boundary). A batch deployment runs without a waiting user
+    # (`run_mode=batch` credential); otherwise a continuation whose last input
+    # is a tool result / assistant turn is self-driven (`critical_path`),
+    # while a user turn is user-intervened (`user_waiting`). The two-value
+    # domain is enforced at the exit; explicit node/credential/service values
+    # still override per tier precedence.
+    run_mode = (credentials.get("run_mode") or "interactive").strip().lower()
+    if run_mode == "batch":
+        baseline_priority = {"level": 1, "reason": "background"}
+    elif (_message_role(prompt_messages[-1]).lower() if prompt_messages else "") in (
+        "tool",
+        "assistant",
+    ):
+        baseline_priority = {"level": 1, "reason": "critical_path"}
+    else:
+        baseline_priority = {"level": 3, "reason": "user_waiting"}
+
     merged: dict = {
         "session": {"session_id": session_id},
-        # tier-1 baseline: interactive deployments (the default posture —
-        # someone is waiting); batch pools override via tier-2 hints_json.
-        "priority": {"level": 3, "reason": "user_waiting"},
+        "priority": baseline_priority,
     }
 
     # tier 2: credential static hints_json (partial AgentHint)
@@ -227,17 +252,39 @@ def build_hint(
         if dynamic:
             deep_merge(merged, dynamic)
 
-    # cache_control auto pin (opt-out via credential cache_pin=false). An explicit
-    # cache_pin_ttl_s arms the pin with a TTL so TTL-bounded retention consumers
-    # (e.g. the Motor KV Hint bridge) can map the declaration; without it the pin
-    # stays permanent-by-default and such consumers keep it unmapped.
+    # agent_status: the in-band lifecycle snapshot (protocol §4). The plugin
+    # only runs while a model request is being prepared, so the real state is
+    # ``running``; a run-scoped hint-service binding may override the state and
+    # state_since_ms with real run facts.
+    merged.setdefault(
+        "agent_status", {"state": "running", "state_since_ms": now_ms}
+    )
+
+    # cache_control (opt-out via credential cache_pin=false), derived per the
+    # cache-control guide: one ``ephemeral`` declaration with an explicit TTL.
+    # The gap comes from the merged prediction (next tool expected duration ->
+    # measured inter-call interval -> 300 s fallback); ``range.end`` is the
+    # logical input count; nothing is declared below one 128-token block or on
+    # a rewritten prefix (compaction/branch). An explicit cache_pin_ttl_s
+    # overrides the derived TTL.
     if credentials.get("cache_pin", "true").strip().lower() != "false" \
             and "cache_control" not in merged:
-        auto_pin: dict = {"type": "pin", "range": {"end": 1, "unit": "message"}}
-        ttl_s = _auto_pin_ttl_s(credentials.get("cache_pin_ttl_s"))
-        if ttl_s is not None:
-            auto_pin["ttl_s"] = ttl_s
-        merged["cache_control"] = [auto_pin]
+        session_id = str((merged.get("session") or {}).get("session_id") or "")
+        if not prefix_rewritten(session_id, prompt_messages):
+            ttl_override = _auto_pin_ttl_s(credentials.get("cache_pin_ttl_s"))
+            declaration = (
+                build_cache_control(
+                    logical_count=logical_message_count(prompt_messages),
+                    prefix_tokens=estimate_tokens(
+                        [_message_content(message) for message in prompt_messages]
+                    ),
+                    ttl_s=ttl_override,
+                )
+                if ttl_override is not None
+                else derive_cache_control(prompt_messages, merged)
+            )
+            if declaration is not None:
+                merged["cache_control"] = [declaration]
 
     # v2 two-value fold: priority.level ∈ {1, 3} (3 = user-intervened).
     # Applied after all tiers so legacy {2, 4} and out-of-domain node params

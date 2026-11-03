@@ -23,7 +23,7 @@ projection is added).
     "call_index": 1,
     "epoch": 0
   },
-  "agent_status": {                        // usually via the status channel, not the header
+  "agent_status": {                        // in-band: running at request time
     "state": "running|tool|pause|suspend|finalize",
     "state_since_ms": 0,
     "reason": "await_tool|human_approval|…",
@@ -31,8 +31,8 @@ projection is added).
   },
   "priority":        { "level": 1, "reason": "user_waiting|critical_path|background" },
   "strict_priority": { "level": 1, "reason": "…" },   // trusted control plane only
-  "cache_control": [ { "type": "pin|ephemeral", "ttl_s": 0,
-                       "range": { "start": 0, "end": 1, "unit": "message|token" } } ],
+  "cache_control": [ { "type": "ephemeral", "ttl_s": 240,
+                       "range": { "end": 1, "unit": "message" } } ],
   "prediction": {
     "latency_ms": 0, "remaining_calls": 0, "output_tokens": 0,
     "interval_ms": 0, "remaining_time_ms": 0, "expected_resume_s": 0,
@@ -50,18 +50,18 @@ absent fields (`exclude_none`), never fabricated values.
 
 | Field | Plugin-local | Hint service | Notes |
 |---|---|---|---|
-| `session.session_id` | ✅ user channel / prefix hash / static | ✅ override | stable within one context |
+| `session.session_id` | ✅ user channel / prefix hash / static (platform boundary: no run id in the plugin) | ✅ optional run-scoped binding | stands alone; the service only upgrades fidelity |
 | `session.agent_type` | ✅ `hints_json` | ✅ | role/step identity |
 | `session.call_index` | — | ✅ | per-session call ordinal |
 | `session.parent_session_id` / `derivation` | — | ✅ | multi-agent orchestration data |
 | `session.epoch` | — | ✅ | context version after rewrites |
-| `priority` | ✅ node param + `hints_json` | ✅ | higher = more urgent |
+| `priority` | ✅ plugin-native trigger classification + `run_mode` + node param + `hints_json` | ✅ optional step priority | folded into `{1,3}`; explicit/service values win |
 | `strict_priority` | — | ✅ (control plane) | agents never set it |
-| `cache_control` | ✅ auto `pin(end:1,message)`, optional explicit `ttl_s` via `cache_pin_ttl_s` | ✅ | `cache_pin=false` disables the auto pin |
+| `cache_control` | ✅ derived `ephemeral` + TTL per the guide; `cache_pin=false` disables; `cache_pin_ttl_s` overrides the derived TTL | ✅ | TTL = `clamp(gap*2, 60, 3600)`, `gap` from next-tool p90 / interval / 300 s; `end` = logical input count; omitted below 128 tokens or on a rewritten prefix |
 | `prediction.output_tokens` / `interval_ms` | ✅ node params (`osl` / `iat`) | ✅ | |
 | `prediction.latency_ms` / `remaining_calls` / `remaining_time_ms` / `expected_resume_s` | — | ✅ | measured statistics |
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |
-| `agent_status` | — | — | **status event channel** (§4), not the request header |
+| `agent_status` | ✅ default `running` + `state_since_ms` | ✅ run-scoped override | real transitions ride the **status event channel** (§4) |
 
 ## Two-value level domain (v2)
 

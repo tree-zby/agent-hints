@@ -43,6 +43,16 @@ def make_handler(store: HintStore):
             if not isinstance(body, dict):
                 self._send(400, {"error": "body must be a json object"})
                 return
+            if parsed.path == "/v1/bindings":
+                prefix_id = str(body.get("prefix_id") or "").strip()
+                hint = body.get("hint")
+                if not prefix_id or not isinstance(hint, dict):
+                    self._send(400, {"error": "prefix_id and hint are required"})
+                    return
+                ttl_s = body.get("ttl_s", 600)
+                bound = store.bind(prefix_id, hint, int(ttl_s) if ttl_s else 600)
+                self._send(200, {"bound": bound})
+                return
             if parsed.path == "/v1/hints":
                 entries = body.get("entries")
                 if not isinstance(entries, list):

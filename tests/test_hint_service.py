@@ -93,3 +93,48 @@ def test_healthz(base_url):
     base, _ = base_url
     st, body = _get(base + "/healthz")
     assert (st, body) == (200, {"ok": True})
+
+
+def test_run_binding_overrides_static_entry(base_url):
+    base, _ = base_url
+    _post(base + "/v1/hints", {"entries": [
+        {"prefix_id": "bind1", "hint": {
+            "session": {"agent_type": "START", "call_index": 1},
+            "priority": {"level": 3, "reason": "user_waiting"}}}]})
+    st, body = _post(base + "/v1/bindings", {
+        "prefix_id": "bind1",
+        "hint": {"session": {"session_id": "run-42"},
+                 "agent_status": {"state": "running", "state_since_ms": 1}},
+        "ttl_s": 60})
+    assert (st, body) == (200, {"bound": 1})
+    st, hint = _get(base + "/v1/hints?prefix_id=bind1")
+    assert hint["session"] == {
+        "agent_type": "START", "call_index": 1, "session_id": "run-42"}
+    assert hint["priority"]["reason"] == "user_waiting"
+    assert hint["agent_status"]["state"] == "running"
+
+
+def test_run_binding_expires(base_url, monkeypatch):
+    base, _ = base_url
+    import hint_service.store as store_mod
+
+    now_ms = [1_000_000]
+    monkeypatch.setattr(store_mod.time, "time", lambda: now_ms[0] / 1000.0)
+    _post(base + "/v1/bindings", {
+        "prefix_id": "exp",
+        "hint": {"session": {"session_id": "r"}},
+        "ttl_s": 10})
+    st, hint = _get(base + "/v1/hints?prefix_id=exp")
+    assert hint["session"]["session_id"] == "r"
+    now_ms[0] += 11_000
+    st, hint = _get(base + "/v1/hints?prefix_id=exp")
+    assert hint == {}
+
+
+def test_binding_requires_prefix_and_hint(base_url):
+    base, _ = base_url
+    import urllib.error
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(base + "/v1/bindings", {"prefix_id": "", "hint": {}})
+    assert exc.value.code == 400

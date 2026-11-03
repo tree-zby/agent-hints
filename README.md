@@ -66,8 +66,10 @@ is forwarded with backend-specific polarity normalized inside Dynamo).
 
 ## Data sources (low → high precedence)
 
-1. **Auto defaults** — identity + `priority.level = 3` (`user_waiting`; the
-   interactive posture — batch pools override via tier 2).
+1. **Auto defaults (plugin-native)** — identity + a trigger-derived
+   `priority`: a user turn is `3/user_waiting`; a tool-result / assistant
+   continuation is `1/critical_path` (self-driven); `run_mode=batch` reports
+   `1/background`. No external tooling is required for this baseline.
 2. **Credential `hints_json`** — a static partial AgentHint JSON.
 3. **Node completion params** — `priority / osl / iat` tunable per LLM node
    in the Dify workflow UI. `osl` and `iat` affect only the header.
@@ -125,7 +127,8 @@ Unreachable or malformed responses count as "no hints this time".
 |---|---|---|
 | `emit_nvext` | true | Adds `nvext.agent_hints` with only `priority`; false omits `nvext`. |
 | `emit_header` | true | Adds the `X-Agent-Hint` header. |
-| `cache_pin` | true | Pins the static system prefix (`cache_control`) unless hints provide one. |
+| `run_mode` | interactive | `batch` makes the plugin-native priority baseline `1/background` (non-waiting deployments). |
+| `cache_pin` | true | Emits the derived `cache_control` declaration unless hints provide one. |
 | `cache_pin_ttl_s` | *(empty)* | Arms the auto pin with an explicit `ttl_s` (e.g. `600`) so TTL-bounded retention consumers — such as the Motor KV Hint bridge — can map the declaration; empty keeps the permanent pin. Invalid values degrade to the permanent pin. |
 
 See [PRIVACY.md](PRIVACY.md). The plugin is stateless: it contacts only the

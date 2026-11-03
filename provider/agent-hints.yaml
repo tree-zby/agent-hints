@@ -135,10 +135,26 @@ model_credential_schema:
           label:
             en_US: "No"
             zh_Hans: "否"
+    - variable: run_mode
+      label:
+        en_US: Run Mode
+        zh_Hans: 运行模式
+      type: select
+      required: false
+      default: "interactive"
+      options:
+        - value: "interactive"
+          label:
+            en_US: Interactive (a user is waiting)
+            zh_Hans: 交互（有用户等待）
+        - value: "batch"
+          label:
+            en_US: Batch (background evaluation)
+            zh_Hans: 批量（后台评测）
     - variable: cache_pin
       label:
-        en_US: Auto Pin First Message
-        zh_Hans: 自动 Pin 首条消息
+        en_US: Emit cache_control
+        zh_Hans: 下发 cache_control
       type: select
       required: false
       default: "true"
@@ -153,13 +169,13 @@ model_credential_schema:
             zh_Hans: "否"
     - variable: cache_pin_ttl_s
       label:
-        en_US: Auto Pin TTL (seconds, optional)
-        zh_Hans: 自动 Pin TTL（秒，可选）
+        en_US: cache_control TTL override (seconds, optional)
+        zh_Hans: cache_control TTL 覆盖（秒，可选）
       type: text-input
       required: false
       placeholder:
-        en_US: "e.g. 600 — arms the auto pin with an explicit TTL so TTL-bounded retention consumers (KV Hint bridge) can map it; empty keeps the permanent pin"
-        zh_Hans: "例如 600 —— 自动 Pin 携带显式 TTL，供有界保留消费方（KV Hint 桥）映射；留空保持永久 pin"
+        en_US: "e.g. 600 — overrides the derived TTL (next-tool p90 -> measured interval -> 300 s fallback); empty derives automatically"
+        zh_Hans: "例如 600 —— 覆盖推导 TTL（下一工具 p90 → 实测间隔 → 300s 兜底）；留空自动推导"
 extra:
   python:
     provider_source: provider/agent-hints.py

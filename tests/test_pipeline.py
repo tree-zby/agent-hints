@@ -68,6 +68,31 @@ def test_defaults_two_level_baseline_and_no_extra_fields():
     assert hint.prediction is None
 
 
+def test_priority_baseline_from_trigger_source():
+    """Plugin-native: a user turn is user-intervened; a continuation is not."""
+    user_turn = [sys_msg("s"), msg("user", "question")]
+    hint, _ = pipeline_mod.build_hint(user_turn, {}, dict(CREDS_BASE))
+    assert hint.priority == hint_mod.PriorityHint(level=3, reason="user_waiting")
+
+    continuation = [sys_msg("s"), msg("user", "q"), msg("tool", "result")]
+    hint, _ = pipeline_mod.build_hint(continuation, {}, dict(CREDS_BASE))
+    assert hint.priority == hint_mod.PriorityHint(level=1, reason="critical_path")
+
+
+def test_priority_baseline_batch_run_mode():
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, dict(CREDS_BASE, run_mode="batch"))
+    assert hint.priority == hint_mod.PriorityHint(level=1, reason="background")
+
+
+def test_priority_explicit_values_win_over_trigger():
+    continuation = [sys_msg("s"), msg("user", "q"), msg("tool", "r")]
+    hint, _ = pipeline_mod.build_hint(continuation, {"priority": 3}, dict(CREDS_BASE))
+    assert hint.priority.level == 3
+    creds = dict(CREDS_BASE, hints_json=json.dumps({"priority": {"level": 3}}))
+    hint, _ = pipeline_mod.build_hint(continuation, {}, creds)
+    assert hint.priority.level == 3
+
+
 def test_priority_level_folds_to_two_value_domain():
     cases = {1: 1, 2: 1, 3: 3, 4: 3, 0: 1, -5: 1, 7: 3}
     for level, expected in cases.items():
@@ -143,14 +168,60 @@ def test_service_none_response_degrades():
 
 
 # ---------------------------------------------------------------------------
-# cache_control
+# cache_control (CACHE_CONTROL_IMPLEMENTATION_GUIDE.md)
 # ---------------------------------------------------------------------------
-def test_cache_pin_default_and_off():
-    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, dict(CREDS_BASE))
+LONG = "cache block " * 120  # ~360 tokens
+
+
+def test_cache_control_derived_default_and_off():
+    hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, dict(CREDS_BASE))
     assert hint.cache_control == [hint_mod.CacheControlHint(
-        type="pin", range=hint_mod.HintRange(end=1, unit="message"))]
+        type="ephemeral", ttl_s=600,
+        range=hint_mod.HintRange(end=1, unit="message"))]
     creds = dict(CREDS_BASE, cache_pin="false")
-    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
+    hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
+    assert hint.cache_control is None
+
+
+def test_cache_control_short_prefix_is_not_declared():
+    hint, _ = pipeline_mod.build_hint([sys_msg("short")], {}, dict(CREDS_BASE))
+    assert hint.cache_control is None
+
+
+def test_cache_control_ttl_from_prediction_interval():
+    creds = dict(CREDS_BASE,
+                 hints_json=json.dumps({"prediction": {"interval_ms": 120000}}))
+    hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
+    assert hint.cache_control[0].type == "ephemeral"
+    assert hint.cache_control[0].ttl_s == 240  # 120 s gap * 2
+
+
+def test_cache_control_ttl_from_next_tool_expected_duration():
+    creds = dict(CREDS_BASE, hints_json=json.dumps({
+        "prediction": {"next_action": {
+            "state": "tool",
+            "tools": [{"name": "t", "expected_duration_s": 120}]}}}))
+    hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
+    assert hint.cache_control[0].ttl_s == 240
+
+
+def test_cache_control_explicit_ttl_override_and_invalid_fallback():
+    creds = dict(CREDS_BASE, cache_pin_ttl_s="600")
+    hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
+    assert hint.cache_control[0].ttl_s == 600
+    for raw in ("abc", "0", "-5", ""):
+        creds = dict(CREDS_BASE, cache_pin_ttl_s=raw)
+        hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
+        assert hint.cache_control[0].ttl_s == 600  # derived fallback
+
+
+def test_cache_control_skips_prefix_rewrite():
+    long_system = "rewrite block " * 120
+    base = [sys_msg(long_system), msg("user", "one"), msg("user", "two")]
+    hint, _ = pipeline_mod.build_hint(base, {}, dict(CREDS_BASE), user="sess-rewrite")
+    assert hint.cache_control is not None
+    shrunk = [sys_msg(long_system), msg("user", "one")]
+    hint, _ = pipeline_mod.build_hint(shrunk, {}, dict(CREDS_BASE), user="sess-rewrite")
     assert hint.cache_control is None
 
 
@@ -163,34 +234,70 @@ def test_cache_control_from_service_not_overwritten():
     assert hint.cache_control[0].type == "ephemeral"
 
 
-def test_cache_pin_ttl_s_arms_auto_pin():
-    """cache_pin_ttl_s arms the auto pin with an explicit TTL (KV-Hint-bridge consumable)."""
-    creds = dict(CREDS_BASE, cache_pin_ttl_s="600")
-    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
-    assert hint.cache_control == [hint_mod.CacheControlHint(
-        type="pin", ttl_s=600, range=hint_mod.HintRange(end=1, unit="message"))]
+# ---------------------------------------------------------------------------
+# optional hint-service enrichment: lineage / fork / epoch / prediction
+# ---------------------------------------------------------------------------
+def test_service_lineage_spawn_enrichment():
+    dynamic = {
+        "session": {
+            "parent_session_id": "s-root01",
+            "derivation": {"relation": "spawn", "join": "sync"},
+        }
+    }
+    creds = dict(CREDS_BASE, hint_service_url="http://hs")
+    hint, _ = pipeline_mod.build_hint(
+        [sys_msg("s")], {}, creds, fetch_fn=lambda url, timeout: dynamic
+    )
+    assert hint.session.parent_session_id == "s-root01"
+    assert hint.session.derivation == {"relation": "spawn", "join": "sync"}
 
 
-def test_cache_pin_ttl_s_invalid_degrades_to_ttl_less_pin():
-    """Non-numeric / non-positive values fall back to the permanent pin, never raise."""
-    for raw in ("abc", "0", "-5", "", None):
-        creds = dict(CREDS_BASE)
-        if raw is not None:
-            creds["cache_pin_ttl_s"] = raw
-        hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
-        assert hint.cache_control == [hint_mod.CacheControlHint(
-            type="pin", ttl_s=None, range=hint_mod.HintRange(end=1, unit="message"))]
+def test_service_lineage_fork_and_epoch_enrichment():
+    dynamic = {
+        "session": {
+            "parent_session_id": "s-root01",
+            "derivation": {"relation": "fork", "fork_point": 12},
+            "epoch": 3,
+        }
+    }
+    creds = dict(CREDS_BASE, hint_service_url="http://hs")
+    hint, _ = pipeline_mod.build_hint(
+        [sys_msg("s")], {}, creds, fetch_fn=lambda url, timeout: dynamic
+    )
+    assert hint.session.derivation == {"relation": "fork", "fork_point": 12}
+    assert hint.session.epoch == 3
 
 
-def test_cache_pin_ttl_s_service_control_still_wins():
-    """A service-provided cache_control is never overwritten by the armed auto pin."""
+def test_service_prediction_latency_and_remaining_calls():
+    dynamic = {"prediction": {"latency_ms": 4100, "remaining_calls": 3}}
+    creds = dict(CREDS_BASE, hint_service_url="http://hs")
+    hint, _ = pipeline_mod.build_hint(
+        [sys_msg("s")], {}, creds, fetch_fn=lambda url, timeout: dynamic
+    )
+    assert hint.prediction.latency_ms == 4100
+    assert hint.prediction.remaining_calls == 3
+
+
+# ---------------------------------------------------------------------------
+# agent_status
+# ---------------------------------------------------------------------------
+def test_agent_status_defaults_to_running():
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, dict(CREDS_BASE))
+    assert hint.agent_status is not None
+    assert hint.agent_status.state == "running"
+    assert isinstance(hint.agent_status.state_since_ms, int)
+
+
+def test_agent_status_service_override_wins():
     def fake_fetch(url, timeout):
-        return {"cache_control": [{"type": "ephemeral", "ttl_s": 30}]}
+        return {"agent_status": {"state": "tool", "state_since_ms": 123,
+                                 "reason": "await_tool",
+                                 "tools": [{"name": "t", "call_id": "c"}]}}
 
-    creds = dict(CREDS_BASE, hint_service_url="http://hs", cache_pin_ttl_s="600")
+    creds = dict(CREDS_BASE, hint_service_url="http://hs")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=fake_fetch)
-    assert hint.cache_control[0].type == "ephemeral"
-    assert hint.cache_control[0].ttl_s == 30
+    assert hint.agent_status.state == "tool"
+    assert hint.agent_status.state_since_ms == 123
 
 
 # ---------------------------------------------------------------------------
