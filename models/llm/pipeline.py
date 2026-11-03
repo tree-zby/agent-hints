@@ -42,6 +42,22 @@ from .hint import AgentHint
 FetchFn = Callable[[str, float], Optional[dict]]
 
 
+_WIRE_STATES = frozenset({"running", "pause", "resume", "finalize"})
+_STATE_FOLDS = {"tool": "running", "suspend": "pause"}
+
+
+def fold_state(value: Any, *, default: str = "running") -> str:
+    """Fold an internal/legacy state into the 4-value wire contract.
+
+    ``tool`` -> ``running``, ``suspend`` -> ``pause`` (AGENT_STATUS_STATE_DESIGN
+    v1.0); unknown values degrade to ``default`` so a producer's vocabulary
+    change never invalidates the hint.
+    """
+    state = str(value or "").strip().lower()
+    state = _STATE_FOLDS.get(state, state)
+    return state if state in _WIRE_STATES else default
+
+
 def normalize_priority_level(level: int) -> int:
     """Fold a priority level into the two-value domain {1, 3}.
 
@@ -259,6 +275,16 @@ def build_hint(
     merged.setdefault(
         "agent_status", {"state": "running", "state_since_ms": now_ms}
     )
+    # 4-value wire contract: fold internal states from any producer at the
+    # boundary (tool -> running, suspend -> pause; unknown -> running).
+    status_block = merged.get("agent_status")
+    if isinstance(status_block, dict):
+        status_block["state"] = fold_state(status_block.get("state"))
+    prediction_block = merged.get("prediction")
+    if isinstance(prediction_block, dict):
+        next_action_block = prediction_block.get("next_action")
+        if isinstance(next_action_block, dict) and next_action_block.get("state") is not None:
+            next_action_block["state"] = fold_state(next_action_block.get("state"))
 
     # cache_control (opt-out via credential cache_pin=false), derived per the
     # cache-control guide: one ``ephemeral`` declaration with an explicit TTL.
@@ -269,8 +295,11 @@ def build_hint(
     # overrides the derived TTL.
     if credentials.get("cache_pin", "true").strip().lower() != "false" \
             and "cache_control" not in merged:
-        session_id = str((merged.get("session") or {}).get("session_id") or "")
-        if not prefix_rewritten(session_id, prompt_messages):
+        # Cache prefixes belong to the node/system template, not the run: two
+        # different workflow nodes naturally have different system prefixes and
+        # must not be mistaken for a compaction rewrite. Key the fingerprint by
+        # the content-derived prefix id (same value the hint service uses).
+        if not prefix_rewritten(prefix_id, prompt_messages):
             ttl_override = _auto_pin_ttl_s(credentials.get("cache_pin_ttl_s"))
             declaration = (
                 build_cache_control(

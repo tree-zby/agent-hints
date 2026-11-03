@@ -23,8 +23,8 @@ projection is added).
     "call_index": 1,
     "epoch": 0
   },
-  "agent_status": {                        // in-band: running at request time
-    "state": "running|tool|pause|suspend|finalize",
+  "agent_status": {                        // 4-value wire contract
+    "state": "running|pause|resume|finalize",
     "state_since_ms": 0,
     "reason": "await_tool|human_approval|…",
     "tools": [{ "name": "…", "call_id": "…", "child_session_id": "…" }]
@@ -36,7 +36,7 @@ projection is added).
   "prediction": {
     "latency_ms": 0, "remaining_calls": 0, "output_tokens": 0,
     "interval_ms": 0, "remaining_time_ms": 0, "expected_resume_s": 0,
-    "next_action": { "state": "running|tool|pause|suspend|finalize",
+    "next_action": { "state": "running|pause|resume|finalize",
                      "tools": [{ "name": "…", "expected_duration_s": 0 }],
                      "prob": 0.0 }
   }
@@ -61,7 +61,7 @@ absent fields (`exclude_none`), never fabricated values.
 | `prediction.output_tokens` / `interval_ms` | ✅ node params (`osl` / `iat`) | ✅ | |
 | `prediction.latency_ms` / `remaining_calls` / `remaining_time_ms` / `expected_resume_s` | — | ✅ | measured statistics |
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |
-| `agent_status` | ✅ default `running` + `state_since_ms` | ✅ run-scoped override | real transitions ride the **status event channel** (§4) |
+| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `running`/`pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract (`AGENT_STATUS_STATE_DESIGN.md` v1.0); `reason`/`tools` ride the **status event channel** (§4) |
 
 ## Two-value level domain (v2)
 

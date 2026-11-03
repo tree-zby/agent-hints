@@ -147,7 +147,7 @@ def test_service_hints_override_node_params():
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], params, creds,
                                       user="run-2", model="m1", fetch_fn=fake_fetch)
     assert hint.prediction.output_tokens == 42  # service > node param
-    assert hint.prediction.next_action.state == "tool"
+    assert hint.prediction.next_action.state == "running"  # tool folds to running
     assert hint.session.agent_type == "research.web_search"
 
 
@@ -165,6 +165,28 @@ def test_service_none_response_degrades():
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds,
                                       fetch_fn=lambda url, t: None)
     assert hint.priority.level == 3
+
+
+def test_state_fold_tool_suspend_and_unknown():
+    assert pipeline_mod.fold_state("tool") == "running"
+    assert pipeline_mod.fold_state("suspend") == "pause"
+    assert pipeline_mod.fold_state("running") == "running"
+    assert pipeline_mod.fold_state("pause") == "pause"
+    assert pipeline_mod.fold_state("resume") == "resume"
+    assert pipeline_mod.fold_state("finalize") == "finalize"
+    assert pipeline_mod.fold_state("weird") == "running"
+    assert pipeline_mod.fold_state(None) == "running"
+
+
+def test_service_agent_status_suspend_folds_to_pause():
+    def fake_fetch(url, timeout):
+        return {"agent_status": {"state": "suspend", "state_since_ms": 5,
+                                 "reason": "checkpoint"}}
+
+    creds = dict(CREDS_BASE, hint_service_url="http://hs")
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=fake_fetch)
+    assert hint.agent_status.state == "pause"
+    assert hint.agent_status.reason == "checkpoint"
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +245,20 @@ def test_cache_control_skips_prefix_rewrite():
     shrunk = [sys_msg(long_system), msg("user", "one")]
     hint, _ = pipeline_mod.build_hint(shrunk, {}, dict(CREDS_BASE), user="sess-rewrite")
     assert hint.cache_control is None
+
+
+def test_cache_control_distinct_prefixes_are_not_a_rewrite():
+    """Two workflow nodes have different system prefixes; both must declare."""
+    hint_a, _ = pipeline_mod.build_hint(
+        [sys_msg("node A " + "x" * 600), msg("user", "one")],
+        {}, dict(CREDS_BASE), user="run-multi",
+    )
+    hint_b, _ = pipeline_mod.build_hint(
+        [sys_msg("node B " + "y" * 600), msg("user", "one")],
+        {}, dict(CREDS_BASE), user="run-multi",
+    )
+    assert hint_a.cache_control is not None
+    assert hint_b.cache_control is not None
 
 
 def test_cache_control_from_service_not_overwritten():
@@ -296,8 +332,9 @@ def test_agent_status_service_override_wins():
 
     creds = dict(CREDS_BASE, hint_service_url="http://hs")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=fake_fetch)
-    assert hint.agent_status.state == "tool"
+    assert hint.agent_status.state == "running"  # tool folds to running
     assert hint.agent_status.state_since_ms == 123
+    assert hint.agent_status.reason == "await_tool"  # event detail kept
 
 
 # ---------------------------------------------------------------------------

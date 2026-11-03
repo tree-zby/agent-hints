@@ -9,17 +9,17 @@ import base64
 import json
 
 TS_GOLDEN = (
-    "eyJzZXNzaW9uIjp7InNlc3Npb25faWQiOiJzLTdmM2EyYyIsInBhcmVudF9zZXNzaW9uX2lkIjoi"
-    "cy1yb290MDEiLCJkZXJpdmF0aW9uIjp7InJlbGF0aW9uIjoic3Bhd24iLCJqb2luIjoic3luYyJ9"
-    "LCJhZ2VudF90eXBlIjoicmVzZWFyY2hlciIsImNhbGxfaW5kZXgiOjIsImVwb2NoIjowfSwiYWdl"
-    "bnRfc3RhdHVzIjp7InN0YXRlIjoicnVubmluZyIsInN0YXRlX3NpbmNlX21zIjoxNzkwMDAwMDAw"
-    "MDAwfSwicHJlZGljdGlvbiI6eyJyZW1haW5pbmdfY2FsbHMiOjMsIm91dHB1dF90b2tlbnMiOjQy"
-    "MCwiaW50ZXJ2YWxfbXMiOjExODAwLCJsYXRlbmN5X21zIjo0MTAwLCJuZXh0X2FjdGlvbiI6eyJz"
-    "dGF0ZSI6InRvb2wiLCJ0b29scyI6W3sibmFtZSI6IndlYl9zZWFyY2giLCJleHBlY3RlZF9kdXJh"
-    "dGlvbl9zIjo4fV0sInByb2IiOjAuODV9fSwicHJpb3JpdHkiOnsibGV2ZWwiOjMsInJlYXNvbiI6"
-    "ImNyaXRpY2FsX3BhdGgifSwiY2FjaGVfY29udHJvbCI6W3sidHlwZSI6InBpbiIsInJhbmdlIjp7"
-    "ImVuZCI6MX19LHsidHlwZSI6ImVwaGVtZXJhbCIsInR0bF9zIjoxMiwicmFuZ2UiOnsiZW5kIjox"
-    "MH19XX0"
+    "eyJzZXNzaW9uIjp7InNlc3Npb25faWQiOiJzLTdmM2EyYyIsInBhcmVudF9zZXNzaW9uX2lk"
+    "Ijoicy1yb290MDEiLCJkZXJpdmF0aW9uIjp7InJlbGF0aW9uIjoic3Bhd24iLCJqb2luIjoi"
+    "c3luYyJ9LCJhZ2VudF90eXBlIjoicmVzZWFyY2hlciIsImNhbGxfaW5kZXgiOjIsImVwb2No"
+    "IjowfSwiYWdlbnRfc3RhdHVzIjp7InN0YXRlIjoicnVubmluZyIsInN0YXRlX3NpbmNlX21z"
+    "IjoxNzkwMDAwMDAwMDAwfSwicHJlZGljdGlvbiI6eyJyZW1haW5pbmdfY2FsbHMiOjMsIm91"
+    "dHB1dF90b2tlbnMiOjQyMCwiaW50ZXJ2YWxfbXMiOjExODAwLCJsYXRlbmN5X21zIjo0MTAw"
+    "LCJuZXh0X2FjdGlvbiI6eyJzdGF0ZSI6InJ1bm5pbmciLCJ0b29scyI6W3sibmFtZSI6Indl"
+    "Yl9zZWFyY2giLCJleHBlY3RlZF9kdXJhdGlvbl9zIjo4fV0sInByb2IiOjAuODV9fSwicHJp"
+    "b3JpdHkiOnsibGV2ZWwiOjMsInJlYXNvbiI6ImNyaXRpY2FsX3BhdGgifSwiY2FjaGVfY29u"
+    "dHJvbCI6W3sidHlwZSI6InBpbiIsInJhbmdlIjp7ImVuZCI6MX19LHsidHlwZSI6ImVwaGVt"
+    "ZXJhbCIsInR0bF9zIjoxMiwicmFuZ2UiOnsiZW5kIjoxMH19XX0"
 )
 
 
@@ -39,7 +39,7 @@ TS_FULL_DICT = {
         "interval_ms": 11800,
         "latency_ms": 4100,
         "next_action": {
-            "state": "tool",
+            "state": "running",
             "tools": [{"name": "web_search", "expected_duration_s": 8}],
             "prob": 0.85,
         },

@@ -46,7 +46,7 @@ class SessionHint(BaseModel):
 
 
 class AgentStatusHint(BaseModel):
-    state: Literal["running", "tool", "pause", "suspend", "finalize"]
+    state: Literal["running", "pause", "resume", "finalize"]
     state_since_ms: Optional[int] = None
     reason: Optional[str] = None
     tools: Optional[list[HintToolRef]] = None
@@ -70,7 +70,7 @@ class CacheControlHint(BaseModel):
 
 
 class NextActionHint(BaseModel):
-    state: Literal["running", "tool", "pause", "suspend", "finalize"]
+    state: Literal["running", "pause", "resume", "finalize"]
     tools: Optional[list[HintPendingTool]] = None
     prob: Optional[float] = None
 

@@ -111,20 +111,23 @@ def _fingerprint(messages: list[Any]) -> tuple[int, str]:
     return (len(messages), hashlib.sha256(first.encode("utf-8")).hexdigest()[:16])
 
 
-def prefix_rewritten(session_id: str, messages: list[Any]) -> bool:
-    """Record the session's message-prefix fingerprint; True on a rewrite.
+def prefix_rewritten(prefix_key: str, messages: list[Any]) -> bool:
+    """Record a cache prefix's fingerprint; True when it was rewritten.
 
-    A rewrite (count shrink or first-message change — compaction/branch) means
-    the previous prefix is gone, so the guide says "don't declare this round".
+    ``prefix_key`` is the content-derived prefix id (the node/system template
+    hash), *not* the run session: different workflow nodes have different
+    system prefixes and must not look like a compaction. For one prefix, a
+    rewrite (count shrink or first-message change) means the previous context
+    is gone, so the guide says "don't declare this round".
     """
-    if not session_id:
+    if not prefix_key:
         return False
     fingerprint = _fingerprint(messages)
     with _LOCK:
-        previous = _PREFIX_FINGERPRINTS.get(session_id)
+        previous = _PREFIX_FINGERPRINTS.get(prefix_key)
         if len(_PREFIX_FINGERPRINTS) >= _MAX_TRACKED_SESSIONS:
             _PREFIX_FINGERPRINTS.clear()
-        _PREFIX_FINGERPRINTS[session_id] = fingerprint
+        _PREFIX_FINGERPRINTS[prefix_key] = fingerprint
     return previous is not None and (
         fingerprint[0] < previous[0] or fingerprint[1] != previous[1]
     )
