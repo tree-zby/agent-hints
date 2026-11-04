@@ -114,8 +114,8 @@ without touching the harness: app-DSL -> content-prefix mapping, run bindings
 (`POST /v1/bindings`), the one-shot approval `resume` pre-bind, the 4-value
 SSE status mapping, and a minimal workflow driver for tests/evaluations.
 
-It is **not** part of the `.difypkg` (the packaging step must exclude
-`integrations/`). Requires the optional `pyyaml` for DSL parsing.
+It is **not** part of the `.difypkg` (`.difyignore` excludes `integrations/`,
+`tests/` and `server/`). Requires the optional `pyyaml` for DSL parsing.
 
 ## Optional hint service
 

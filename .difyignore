@@ -1,0 +1,13 @@
+# Keep the plugin package minimal: companion/test assets and caches are not
+# installed into Dify. `dify plugin package` reads this file (falling back to
+# .gitignore only when it is absent).
+integrations/
+tests/
+server/
+docs/
+.github/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/

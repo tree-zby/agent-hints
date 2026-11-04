@@ -27,7 +27,7 @@ driver = DifyWorkflowDriver(
     base="http://localhost",
     api_key=api_key,
     app_id=app_id,
-    dsl_file="tests/fixtures/hint-approval-e2e.dsl.yml",
+    dsl_file="path/to/exported-app.dsl.yml",  # exported Dify app DSL (YAML)
     hint_service_url="http://localhost:9200",
     status_endpoint="http://localhost:9999/agent-status",
 )
