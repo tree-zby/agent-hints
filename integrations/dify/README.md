@@ -8,7 +8,7 @@ approvals. This companion supplies those facts **without touching the harness**:
 |---|---|
 | `dsl.py` | app DSL -> `node_id -> prefix_id` (content hash of the first system template), graph successors/types |
 | `bindings.py` | `POST {hint_service}/v1/bindings` for the current run; approval pre-binding (first post-gate LLM = `resume`, rest = `running`) |
-| `status.py` | Dify SSE -> 4-value `agent_status` (`tool` -> `running`, `suspend` -> `pause`, human-input completion -> `resume`); posts to a status sink |
+| `status.py` | Dify SSE -> 4-value `agent_status` (`tool`/`suspend` -> `pause`, tool or human-input completion -> `resume`); posts to a status sink |
 | `driver.py` | minimal workflow driver (SSE, auto-pass form submit, bindings, status events) for tests/evaluations |
 
 ## Why a driver?

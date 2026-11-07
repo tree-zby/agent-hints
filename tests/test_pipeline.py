@@ -84,27 +84,30 @@ def test_priority_baseline_batch_run_mode():
     assert hint.priority == hint_mod.PriorityHint(level=1, reason="background")
 
 
-def test_priority_explicit_values_win_over_trigger():
+def test_priority_reason_drives_level():
     continuation = [sys_msg("s"), msg("user", "q"), msg("tool", "r")]
+    # An explicit level cannot contradict the reason: critical_path is level 1.
     hint, _ = pipeline_mod.build_hint(continuation, {"priority": 3}, dict(CREDS_BASE))
-    assert hint.priority.level == 3
-    creds = dict(CREDS_BASE, hints_json=json.dumps({"priority": {"level": 3}}))
+    assert hint.priority.level == 1
+    assert hint.priority.reason == "critical_path"
+    # user_waiting is the only reason that maps to level 3.
+    creds = dict(CREDS_BASE, hints_json=json.dumps(
+        {"priority": {"level": 3, "reason": "user_waiting"}}))
     hint, _ = pipeline_mod.build_hint(continuation, {}, creds)
     assert hint.priority.level == 3
+    assert hint.priority.reason == "user_waiting"
 
 
 def test_priority_level_folds_to_two_value_domain():
     cases = {1: 1, 2: 1, 3: 3, 4: 3, 0: 1, -5: 1, 7: 3}
     for level, expected in cases.items():
-        hint, _ = pipeline_mod.build_hint([sys_msg("s")], {"priority": level},
-                                          dict(CREDS_BASE))
-        assert hint.priority.level == expected
+        assert pipeline_mod.normalize_priority_level(level) == expected
 
 
 def test_fold_keeps_reason_from_lower_tier():
     creds = dict(CREDS_BASE, hints_json=json.dumps({"priority": {"reason": "background"}}))
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {"priority": 4}, creds)
-    assert hint.priority.level == 3
+    assert hint.priority.level == 1
     assert hint.priority.reason == "background"
 
 
@@ -113,9 +116,17 @@ def test_credential_hints_json_merged():
         {"priority": {"level": 3, "reason": "background"},
          "prediction": {"output_tokens": 300}}))
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
-    assert hint.priority.level == 3
+    assert hint.priority.level == 1
     assert hint.priority.reason == "background"
     assert hint.prediction.output_tokens == 300
+
+
+def test_priority_reason_suffix_is_normalized():
+    creds = dict(CREDS_BASE, hints_json=json.dumps(
+        {"priority": {"level": 3, "reason": "background: context_compaction"}}))
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
+    assert hint.priority.level == 1
+    assert hint.priority.reason == "background"
 
 
 def test_invalid_hints_json_silently_ignored():
@@ -147,7 +158,7 @@ def test_service_hints_override_node_params():
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], params, creds,
                                       user="run-2", model="m1", fetch_fn=fake_fetch)
     assert hint.prediction.output_tokens == 42  # service > node param
-    assert hint.prediction.next_action.state == "running"  # tool folds to running
+    assert hint.prediction.next_action.state == "pause"  # tool folds to pause
     assert hint.session.agent_type == "research.web_search"
 
 
@@ -168,7 +179,7 @@ def test_service_none_response_degrades():
 
 
 def test_state_fold_tool_suspend_and_unknown():
-    assert pipeline_mod.fold_state("tool") == "running"
+    assert pipeline_mod.fold_state("tool") == "pause"
     assert pipeline_mod.fold_state("suspend") == "pause"
     assert pipeline_mod.fold_state("running") == "running"
     assert pipeline_mod.fold_state("pause") == "pause"
@@ -332,7 +343,7 @@ def test_agent_status_service_override_wins():
 
     creds = dict(CREDS_BASE, hint_service_url="http://hs")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=fake_fetch)
-    assert hint.agent_status.state == "running"  # tool folds to running
+    assert hint.agent_status.state == "pause"  # tool wait folds to pause
     assert hint.agent_status.state_since_ms == 123
     assert hint.agent_status.reason == "await_tool"  # event detail kept
 
@@ -346,18 +357,22 @@ def test_nvext_defaults_and_header_identity():
     assert hint.session.session_id == pipeline_mod.prefix_hash([sys_msg("s")])
 
 
-@pytest.mark.parametrize("priority, expected", [
-    (0, 1), (1, 1), (2, 1), (3, 3), (4, 3), (5, 3), (10, 3), (90, 3),
-    ("0", 1), ("5", 3),
-])
-def test_nvext_priority_folded_and_sent_unchanged(priority, expected):
-    # The two-value fold happens once at the pipeline exit; nvext carries the
-    # folded level unchanged (no inversion — Dynamo v1.1.0+ semantics).
-    hint, nvext = pipeline_mod.build_hint([sys_msg("s")], {"priority": priority},
+@pytest.mark.parametrize("priority", [0, 1, 2, 3, 4, 5, 10, 90, "0", "5"])
+def test_nvext_priority_folded_and_sent_unchanged(priority):
+    # The wire level is reason-driven: user_waiting is 3, every continuation
+    # is 1; nvext carries that folded level unchanged (no inversion).
+    user_turn = [sys_msg("s"), msg("user", "q")]
+    hint, nvext = pipeline_mod.build_hint(user_turn, {"priority": priority},
                                           dict(CREDS_BASE))
-    assert nvext == {"priority": expected}
+    assert nvext == {"priority": 3}
     assert type(nvext["priority"]) is int
-    assert hint.priority.level == expected
+    assert hint.priority.level == 3
+
+    continuation = [sys_msg("s"), msg("user", "q"), msg("tool", "r")]
+    hint, nvext = pipeline_mod.build_hint(continuation, {"priority": priority},
+                                          dict(CREDS_BASE))
+    assert nvext == {"priority": 1}
+    assert hint.priority.level == 1
 
 
 def test_service_prediction_stays_in_header():

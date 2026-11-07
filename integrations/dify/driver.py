@@ -120,6 +120,12 @@ class DifyWorkflowDriver:
                     data.get("workflow_run_id") or event.get("workflow_run_id") or run_id
                 )
 
+                # Bind every reachable prefix to the run before the first model
+                # request starts; node_started bindings only refine the state.
+                if etype == "workflow_started" and self.binder is not None and run_id:
+                    for prefix in self.binder.dsl_info[0].values():
+                        self.binder.bind(prefix, run_id, "running")
+
                 if etype == "node_started" and self.binder is not None and run_id:
                     self.binder.on_node_started(str(data.get("node_id") or ""), run_id)
 

@@ -21,13 +21,14 @@ agreed cross-harness schema**:
     "call_index": 1,                       // per-session call ordinal
     "epoch": 0                             // context version
   },
-  "priority":        { "level": 1, "reason": "user_waiting" },
+  "priority":        { "level": 3, "reason": "user_waiting" },
   "strict_priority": { "level": 1, "reason": "…" },   // control plane only
-  "cache_control": [ { "type": "pin", "range": { "end": 1, "unit": "message" } } ],
+  "cache_control": [ { "type": "ephemeral", "ttl_s": 240,
+                       "range": { "end": 1, "unit": "message" } } ],
   "prediction": {
     "latency_ms": 0, "remaining_calls": 0, "output_tokens": 0,
     "interval_ms": 0, "remaining_time_ms": 0, "expected_resume_s": 0,
-    "next_action": { "state": "tool",
+    "next_action": { "state": "pause",
                      "tools": [{ "name": "web_search", "expected_duration_s": 8 }],
                      "prob": 0.85 }
   }
@@ -41,8 +42,10 @@ not inside model requests.
 
 ## The compatibility projection: nvext.agent_hints (NVIDIA Dynamo)
 
-The request body includes only `priority` in `nvext.agent_hints`, matching
-the [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) v1.5.1 request contract:
+When `emit_nvext=true` is explicitly enabled (off by default, so the model
+request body stays hint-free), the body includes only `priority` in
+`nvext.agent_hints`, matching the
+[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) v1.5.1 request contract:
 
 ```json
 { "nvext": { "agent_hints": { "priority": 3 } } }
@@ -137,7 +140,7 @@ Unreachable or malformed responses count as "no hints this time".
 
 | Credential | Default | Effect |
 |---|---|---|
-| `emit_nvext` | true | Adds `nvext.agent_hints` with only `priority`; false omits `nvext`. |
+| `emit_nvext` | false | Adds `nvext.agent_hints` with only `priority` when explicitly enabled (Dynamo compatibility); false/omitted keeps the request body hint-free. |
 | `emit_header` | true | Adds the `X-Agent-Hint` header. |
 | `run_mode` | interactive | `batch` makes the plugin-native priority baseline `1/background` (non-waiting deployments). |
 | `cache_pin` | true | Emits the derived `cache_control` declaration unless hints provide one. |

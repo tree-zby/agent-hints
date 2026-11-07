@@ -8,13 +8,12 @@ model requests made on behalf of the Dify workspace that installed it.
 1. **To the configured inference endpoint** (`endpoint_url`): the standard
    OpenAI-compatible chat request — user-provided prompt content and model
    parameters — plus scheduling hint metadata it derives itself:
-   - `nvext.agent_hints` (request body): a content hash of the first system
-     message (`prefix_id`), integer/float scheduling estimates
-     (`priority`, `osl`, `iat`, `latency_sensitivity`).
-   - `X-Agent-Hint` (header, optional): the same estimates plus session
-     identity (content hash or the invocation `user` value), optional cache
-     control markers, and any hint data returned by the configured hint
-     service.
+   - `nvext.agent_hints` (request body, only when `emit_nvext=true`): the
+     folded `priority` integer. Disabled by default, so the request body stays
+     hint-free.
+   - `X-Agent-Hint` (header, optional): session identity (content hash or the
+     invocation `user` value), priority, cache-control markers, and any hint
+     data returned by the configured hint service.
 
 2. **To the configured hint service** (`hint_service_url`, optional): three
    query parameters — `prefix_id` (content hash, not raw content), `user`

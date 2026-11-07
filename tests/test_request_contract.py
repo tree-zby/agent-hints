@@ -19,7 +19,9 @@ from dify_plugin.entities.model.message import SystemPromptMessage, UserPromptMe
 DYNAMO_AGENT_HINT_FIELDS = {
     "priority", "strict_priority", "osl", "speculative_prefill", "latency_sensitivity",
 }
-PRIORITY_CASES = [(0, 1), (5, 3), (10, 3), (None, 3)]
+# The fixture's last message is a user turn, so the reason is user_waiting and
+# the simplified contract pins the level to 3 (only user_waiting is level 3).
+PRIORITY_CASES = [(0, 3), (5, 3), (10, 3), (None, 3)]
 GENERATION_PARAMETERS = {"temperature", "max_tokens", "top_p"}
 MODEL = "contract-test-model"
 MESSAGES = [
@@ -72,7 +74,8 @@ def capture_request(monkeypatch, parameters=None, *, credentials=None, stream=Fa
 @pytest.mark.parametrize("node_priority, expected", PRIORITY_CASES)
 def test_request_priority_contract(monkeypatch, node_priority, expected, stream):
     params = {} if node_priority is None else {"priority": node_priority}
-    request = capture_request(monkeypatch, params, stream=stream)
+    request = capture_request(monkeypatch, params, credentials={"emit_nvext": "true"},
+                              stream=stream)
     body = json.loads(request.content)
     hints = body["nvext"]["agent_hints"]
     assert set(hints) == {"priority"}
@@ -130,6 +133,7 @@ def test_other_hints_stay_in_header_and_service_query(monkeypatch):
         credentials={
             "hint_service_url": "http://hint-service.invalid",
             "latency_sensitivity": 7.0,
+            "emit_nvext": "true",
             "hints_json": json.dumps({"priority": {"level": 3}, "prefix_id": "static"}),
         },
     )

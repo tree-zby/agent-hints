@@ -121,11 +121,11 @@ model_credential_schema:
             zh_Hans: "否"
     - variable: emit_nvext
       label:
-        en_US: Emit nvext.agent_hints (Dynamo)
-        zh_Hans: 下发 nvext.agent_hints（Dynamo）
+        en_US: Emit nvext.agent_hints (Dynamo; off by default)
+        zh_Hans: 下发 nvext.agent_hints（Dynamo；默认关闭）
       type: select
       required: false
-      default: "true"
+      default: "false"
       options:
         - value: "true"
           label:

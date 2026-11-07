@@ -1,8 +1,8 @@
 """Dify SSE -> 4-value ``agent_status`` events (AGENT_STATUS_STATE_DESIGN v1.0).
 
-``tool`` nodes fold to ``running`` (the reason/tools stay on the event) and
-``suspend`` folds to ``pause``; a human-input completion is the one-shot
-``resume`` edge.
+A tool wait is a ``pause`` (``await_tool``; the reason/tools stay on the
+event), its completion is the one-shot ``resume`` edge, and a human-input
+completion is the same ``resume`` edge. ``suspend`` folds to ``pause``.
 """
 
 from __future__ import annotations
@@ -46,14 +46,15 @@ def lifecycle_status_for(evt: dict[str, Any]) -> dict[str, Any] | None:
                 call_id = data.get("execution_id") or data.get("id")
                 if call_id:
                     tool_ref["call_id"] = str(call_id)
-                # tool folds to running on the wire; the ref stays on the event.
+                # tool wait is a pause on the wire; the ref stays on the event.
                 return {
-                    "state": "running",
+                    "state": "pause",
                     "state_since_ms": now_ms,
                     "reason": "await_tool",
                     "tools": [tool_ref],
                 }
-            return {"state": "running", "state_since_ms": now_ms}
+            # Tool result returned: the one-shot resume edge.
+            return {"state": "resume", "state_since_ms": now_ms}
         return None
 
     if etype == "workflow_finished":

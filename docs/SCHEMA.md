@@ -55,28 +55,32 @@ absent fields (`exclude_none`), never fabricated values.
 | `session.call_index` | — | ✅ | per-session call ordinal |
 | `session.parent_session_id` / `derivation` | — | ✅ | multi-agent orchestration data |
 | `session.epoch` | — | ✅ | context version after rewrites |
-| `priority` | ✅ plugin-native trigger classification + `run_mode` + node param + `hints_json` | ✅ optional step priority | folded into `{1,3}`; explicit/service values win |
+| `priority` | ✅ plugin-native trigger classification + `run_mode` + node param + `hints_json` | ✅ optional step priority | reason-driven: `user_waiting` = 3, `critical_path`/`background` = 1; service/node values normalized to the same pair |
 | `strict_priority` | — | ✅ (control plane) | agents never set it |
 | `cache_control` | ✅ derived `ephemeral` + TTL per the guide; `cache_pin=false` disables; `cache_pin_ttl_s` overrides the derived TTL | ✅ | TTL = `clamp(gap*2, 60, 3600)`, `gap` from next-tool p90 / interval / 300 s; `end` = logical input count; omitted below 128 tokens or on a rewritten prefix |
 | `prediction.output_tokens` / `interval_ms` | ✅ node params (`osl` / `iat`) | ✅ | |
 | `prediction.latency_ms` / `remaining_calls` / `remaining_time_ms` / `expected_resume_s` | — | ✅ | measured statistics |
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |
-| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `running`/`pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract (`AGENT_STATUS_STATE_DESIGN.md` v1.0); `reason`/`tools` ride the **status event channel** (§4) |
+| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract (`AGENT_STATUS_STATE_DESIGN.md` v1.0); `reason`/`tools` ride the **status event channel** (§4) |
 
 ## Two-value level domain (v2)
 
 `priority.level` is contracted to **{1, 3}**: `3` = user-intervened
 (admission-exempt), `1` = everything else. The numbers are contract anchors —
 the only semantics is the comparison against the inference-side admission
-level (= 3), not tiers. v1 legacy `{2, 4}` fold to the nearest value
-(`2→1`, `4→3`); any other integer folds by the admission line (`>=3 → 3`,
-else `→ 1`) at pipeline output, so admission outcomes never change.
+level (= 3), not tiers. The simplified contract is reason-driven: only
+`user_waiting` is level 3; `critical_path` and `background` are level 1. Audit
+reasons may carry a suffix in the wild (e.g.
+`background: context_compaction`); the wire reason is the base word. A bare
+level still folds into `{1,3}` so legacy callers keep their admission outcome.
 `reason` remains the audit vocabulary
 (`user_waiting` / `critical_path` / `background`).
 
 ## nvext projection (request body, Dynamo-compatible)
 
-`nvext.agent_hints` contains only `priority` for NVIDIA Dynamo v1.5.1:
+When explicitly enabled with `emit_nvext=true` (off by default so the model
+request body stays hint-free), `nvext.agent_hints` contains only `priority`
+for NVIDIA Dynamo v1.5.1:
 
 | nvext field | source |
 |---|---|

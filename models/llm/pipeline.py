@@ -43,7 +43,7 @@ FetchFn = Callable[[str, float], Optional[dict]]
 
 
 _WIRE_STATES = frozenset({"running", "pause", "resume", "finalize"})
-_STATE_FOLDS = {"tool": "running", "suspend": "pause"}
+_STATE_FOLDS = {"tool": "pause", "suspend": "pause"}
 
 
 def fold_state(value: Any, *, default: str = "running") -> str:
@@ -74,6 +74,32 @@ def normalize_priority_level(level: int) -> int:
     if level == 4:
         return 3
     return 3 if level >= 3 else 1
+
+
+_PRIORITY_REASONS = ("user_waiting", "critical_path", "background")
+
+
+def normalize_priority_block(block: dict) -> None:
+    """Make level/reason consistent: only ``user_waiting`` is level 3.
+
+    Audit reasons may carry a suffix in the wild (e.g.
+    ``background: context_compaction``); the wire reason is the base word.
+    When a reason exists it drives the level; a bare level still folds into
+    {1, 3} so legacy producers keep their admission outcome.
+    """
+    raw_reason = str(block.get("reason") or "").strip()
+    reason = raw_reason
+    for known in _PRIORITY_REASONS:
+        if raw_reason.startswith(known):
+            reason = known
+            break
+    if reason:
+        block["reason"] = reason
+        block["level"] = 3 if reason == "user_waiting" else 1
+        return
+    level = block.get("level")
+    if isinstance(level, int) and not isinstance(level, bool):
+        block["level"] = normalize_priority_level(level)
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -315,14 +341,13 @@ def build_hint(
             if declaration is not None:
                 merged["cache_control"] = [declaration]
 
-    # v2 two-value fold: priority.level ∈ {1, 3} (3 = user-intervened).
-    # Applied after all tiers so legacy {2, 4} and out-of-domain node params
-    # or service values narrow without changing admission outcomes.
+    # v2 two-value contract: only user_waiting is level 3; every other
+    # reason is level 1. Applied after all tiers so service/node/legacy values
+    # (including 3/background and 3/critical_path) cannot produce a
+    # contradictory pair on the wire.
     priority_block = merged.get("priority")
     if isinstance(priority_block, dict):
-        level = priority_block.get("level")
-        if isinstance(level, int) and not isinstance(level, bool):
-            priority_block["level"] = normalize_priority_level(level)
+        normalize_priority_block(priority_block)
 
     hint = AgentHint.model_validate(merged)
 

@@ -154,7 +154,7 @@ class AgentHintsModel(LargeLanguageModel):
                                  user=user, model=model)
 
         headers = build_headers(credentials, hint)
-        emit_nvext = credentials.get("emit_nvext", "true").strip().lower() != "false"
+        emit_nvext = credentials.get("emit_nvext", "false").strip().lower() != "false"
         body = build_body(model, messages, model_parameters, stop, stream, nvext,
                           emit_nvext=emit_nvext)
 

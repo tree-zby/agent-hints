@@ -58,9 +58,14 @@ def test_status_mapping_folds_tool_and_suspend() -> None:
         {"event": "node_started", "data": {"node_type": "tool", "node_id": "t"}}
     )
     assert started is not None
-    assert started["state"] == "running"
+    assert started["state"] == "pause"
     assert started["reason"] == "await_tool"
     assert started["tools"] == [{"name": "t"}]
+
+    released = lifecycle_status_for(
+        {"event": "node_finished", "data": {"node_type": "tool", "node_id": "t"}}
+    )
+    assert released is not None and released["state"] == "resume"
 
     pause = lifecycle_status_for(
         {"event": "node_started", "data": {"node_type": "human-input"}}
