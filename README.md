@@ -136,6 +136,14 @@ Producers: your scheduling layer, CI pipelines, or compile-time tooling that
 registers per-node metadata keyed by the same prefix hash the plugin derives.
 Unreachable or malformed responses count as "no hints this time".
 
+## Auxiliary requests (no hint)
+
+Auxiliary model calls (compaction summaries, session titles) must not carry any
+hint. Pass the node parameter `purpose=summary|compaction|title`; the plugin
+then emits neither `X-Agent-Hint` nor `nvext.agent_hints` for that call. The
+host must set the purpose (Dify workflow completion params or an evaluation
+driver); the plugin cannot infer it from the prompt.
+
 ## Output switches & privacy
 
 | Credential | Default | Effect |

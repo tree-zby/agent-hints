@@ -114,6 +114,14 @@ def test_request_emit_nvext_false(monkeypatch, stream):
     assert hint_mod.decode_agent_hint(request.headers["X-Agent-Hint"]).priority.level == 3
 
 
+@pytest.mark.parametrize("purpose", ["summary", "compaction", "title"])
+def test_auxiliary_purpose_suppresses_hint(monkeypatch, purpose):
+    request = capture_request(monkeypatch, {"purpose": purpose}, stream=False)
+    assert "X-Agent-Hint" not in request.headers
+    body = json.loads(request.content)
+    assert "nvext" not in body
+
+
 def test_other_hints_stay_in_header_and_service_query(monkeypatch):
     queries = []
 

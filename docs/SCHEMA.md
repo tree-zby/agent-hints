@@ -9,6 +9,10 @@ Wire form: AgentHint object → UTF-8 JSON → base64url (unpadded) →
 OpenAI-compatible body (only the optional `nvext.agent_hints` scheduling
 projection is added).
 
+Auxiliary calls (compaction summaries, titles) carry no hint: pass the model
+parameter `purpose=summary|compaction|title`; both the header and the optional
+`nvext` projection are suppressed for that call.
+
 ## Field tree
 
 ```jsonc

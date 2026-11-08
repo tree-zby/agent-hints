@@ -52,6 +52,10 @@ from dify_plugin.interfaces.model.large_language_model import LargeLanguageModel
 from .hint import AGENT_HINT_HEADER, encode_agent_hint
 from .pipeline import build_hint
 
+#: Auxiliary model calls that must not carry any hint (RFC §1.3 / §3.1).
+#: A host that knows the request purpose passes it in ``model_parameters``.
+PURPOSES_NO_HINT = frozenset({"summary", "compaction", "title"})
+
 # ---------------------------------------------------------------------------
 # messages / body
 # ---------------------------------------------------------------------------
@@ -98,13 +102,13 @@ def parse_extra_headers(raw: str) -> dict[str, str]:
     return {str(k): str(v) for k, v in parsed.items() if v is not None}
 
 
-def build_headers(credentials: dict, hint) -> dict[str, str]:
+def build_headers(credentials: dict, hint, *, emit_hint: bool = True) -> dict[str, str]:
     headers: dict[str, str] = {
         "Authorization": f"Bearer {credentials.get('api_key', '')}",
         "Content-Type": "application/json",
     }
     headers.update(parse_extra_headers(credentials.get("extra_headers_json", "")))
-    if credentials.get("emit_header", "true").strip().lower() != "false":
+    if emit_hint and credentials.get("emit_header", "true").strip().lower() != "false":
         headers[AGENT_HINT_HEADER] = encode_agent_hint(hint)
     return headers
 
@@ -153,8 +157,13 @@ class AgentHintsModel(LargeLanguageModel):
         hint, nvext = build_hint(prompt_messages, model_parameters, credentials,
                                  user=user, model=model)
 
-        headers = build_headers(credentials, hint)
-        emit_nvext = credentials.get("emit_nvext", "false").strip().lower() != "false"
+        purpose = str((model_parameters or {}).get("purpose") or "").strip().lower()
+        emit_hint = purpose not in PURPOSES_NO_HINT
+        headers = build_headers(credentials, hint, emit_hint=emit_hint)
+        emit_nvext = (
+            emit_hint
+            and credentials.get("emit_nvext", "false").strip().lower() != "false"
+        )
         body = build_body(model, messages, model_parameters, stop, stream, nvext,
                           emit_nvext=emit_nvext)
 
@@ -301,5 +310,9 @@ class AgentHintsModel(LargeLanguageModel):
                 _rule("iat", "Expected Inter-arrival (ms)", "int", 250,
                       "Expected request inter-arrival time in X-Agent-Hint only.",
                       0, 600000),
+                _rule("purpose", "Request Purpose", "string", "",
+                      "Internal auxiliary purpose (summary/compaction/title); "
+                      "those calls carry no hint.",
+                      zh_help="内部辅助用途（summary/compaction/title）：这些调用不带 hint"),
             ],
         )
