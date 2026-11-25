@@ -13,6 +13,8 @@ repo: https://github.com/tree-zby/agent-hints
 contact: 1454192575@qq.com
 privacy: PRIVACY.md
 icon: icon.svg
+tags:
+  - agent
 resource:
   memory: 268435456
   permission:
