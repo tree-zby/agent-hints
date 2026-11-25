@@ -4,10 +4,13 @@
 integrations/
 tests/
 server/
-docs/
 .github/
 __pycache__/
 *.pyc
 .pytest_cache/
+.git/
+.gitignore
+.difyignore
+**/__pycache__/
 .venv/
 venv/
