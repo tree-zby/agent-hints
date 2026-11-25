@@ -8,14 +8,31 @@ the model request body keeps its original format (nvext.agent_hints is a
 separate, Dynamo-compatible projection produced by the pipeline, not part of
 this schema).
 
+Four blocks are required on every request (missing = non-compliant; extra
+fields are allowed and ignored):
+
+  session             identity + per-request lifecycle summary
+  context_management  whether this is a management request, plus context edits
+  priority_control    canonical location of the soft priority block
+  cache_control       one ephemeral retention declaration, never an array
+
+`priority` (top-level) stays as a compatibility mirror of
+`priority_control.priority`, and `agent_status` keeps carrying the 4-value
+lifecycle word used by the event channel.
+
 See docs/SCHEMA.md for the full field reference.
 """
 import base64
+import json
 from typing import Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 AGENT_HINT_HEADER = "X-Agent-Hint"
+
+# Per-request lifecycle summary. `stop` is reserved for the lifecycle channel
+# and is never sent on a model request by this plugin.
+SessionState = Literal["start", "pause", "resume", "stop", "compact", "append"]
 
 
 class HintToolRef(BaseModel):
@@ -31,11 +48,13 @@ class HintPendingTool(BaseModel):
 
 class SessionHint(BaseModel):
     session_id: str
+    # Explicit null on root sessions: the key must exist on every request.
     parent_session_id: Optional[str] = None
     derivation: Optional[dict] = None
     agent_type: Optional[str] = None
     call_index: Optional[int] = None
     epoch: Optional[int] = None
+    state: SessionState
 
     @field_validator("session_id")
     @classmethod
@@ -57,6 +76,29 @@ class PriorityHint(BaseModel):
     reason: Optional[str] = None
 
 
+class PriorityControl(BaseModel):
+    """Canonical location of the soft priority block."""
+
+    priority: PriorityHint
+
+
+class ContextEdit(BaseModel):
+    type: Literal["offload", "prefetch", "evict"]
+    target: Literal["session", "messages", "tools"] = "session"
+
+
+class ContextManagement(BaseModel):
+    """Whether this is a pure context-management request, plus its edits.
+
+    This plugin only builds requests that the agent was going to send anyway,
+    so `manage_request` is always the string ``"false"``; the edits describe
+    context intent attached to the request.
+    """
+
+    manage_request: Literal["true", "false"] = "false"
+    edits: list[ContextEdit] = Field(default_factory=list)
+
+
 class HintRange(BaseModel):
     start: Optional[int] = None
     end: Optional[int] = None
@@ -64,9 +106,24 @@ class HintRange(BaseModel):
 
 
 class CacheControlHint(BaseModel):
-    type: Literal["pin", "ephemeral"]
+    """One retention declaration (single object, never an array)."""
+
+    type: Literal["ephemeral"]
     ttl_s: Optional[int] = None
+    # 1-based effect point; equals `range.end`.
+    msg_offset: Optional[int] = None
     range: Optional[HintRange] = None
+
+    @model_validator(mode="after")
+    def _offset_matches_range(self) -> "CacheControlHint":
+        if (
+            self.msg_offset is not None
+            and self.range is not None
+            and self.range.end is not None
+            and self.msg_offset != self.range.end
+        ):
+            raise ValueError("cache_control.msg_offset must equal range.end")
+        return self
 
 
 class NextActionHint(BaseModel):
@@ -87,16 +144,39 @@ class PredictionHint(BaseModel):
 
 class AgentHint(BaseModel):
     session: SessionHint
+    context_management: ContextManagement
     agent_status: Optional[AgentStatusHint] = None
     priority: Optional[PriorityHint] = None
+    priority_control: Optional[PriorityControl] = None
     strict_priority: Optional[PriorityHint] = None
-    cache_control: Optional[list[CacheControlHint] | CacheControlHint] = None
+    cache_control: Optional[CacheControlHint] = None
     prediction: Optional[PredictionHint] = None
+
+
+def _wire_dict(hint: AgentHint) -> dict:
+    """`exclude_none` dump with `session.parent_session_id` always present.
+
+    ``exclude_none`` would drop the key on root sessions, but the contract
+    requires it to exist with value ``null`` (no parent). Re-inserting it keeps
+    the field order stable while preserving the "absent means unknown" rule for
+    every other optional field.
+    """
+    data = hint.model_dump(mode="json", exclude_none=True)
+    session = data.get("session") or {}
+    ordered = {
+        "session_id": session.get("session_id"),
+        "parent_session_id": hint.session.parent_session_id,
+    }
+    ordered.update({key: value for key, value in session.items() if key != "session_id"})
+    data["session"] = ordered
+    return data
 
 
 def encode_agent_hint(hint: AgentHint) -> str:
     """Serialize into the X-Agent-Hint header value (base64url, unpadded)."""
-    payload = hint.model_dump_json(exclude_none=True).encode("utf-8")
+    payload = json.dumps(
+        _wire_dict(hint), separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
     return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
 
 

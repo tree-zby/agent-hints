@@ -12,7 +12,9 @@ normalize_priority_level).
 
 Outputs:
   - AgentHint object -> X-Agent-Hint header (UTF-8 JSON -> base64url), full
-    agreed schema (see docs/SCHEMA.md)
+    agreed schema (see docs/SCHEMA.md). The four required blocks are always
+    present: ``session.state``, ``context_management``, ``priority_control``,
+    and a single-object ``cache_control``
   - nvext.agent_hints request-body projection (NVIDIA Dynamo v1.5.1:
     priority only, higher values have higher priority)
 
@@ -45,13 +47,21 @@ FetchFn = Callable[[str, float], Optional[dict]]
 _WIRE_STATES = frozenset({"running", "pause", "resume", "finalize"})
 _STATE_FOLDS = {"tool": "pause", "suspend": "pause"}
 
+# `context_management.edits` expands one edit from `session.state`.
+_CONTEXT_EDITS = {
+    "pause": ({"type": "offload", "target": "session"},),
+    "resume": ({"type": "prefetch", "target": "session"},),
+    "compact": ({"type": "evict", "target": "session"},),
+}
+
 
 def fold_state(value: Any, *, default: str = "running") -> str:
     """Fold an internal/legacy state into the 4-value wire contract.
 
-    ``tool`` -> ``running``, ``suspend`` -> ``pause`` (AGENT_STATUS_STATE_DESIGN
-    v1.0); unknown values degrade to ``default`` so a producer's vocabulary
-    change never invalidates the hint.
+    ``tool`` -> ``pause``, ``suspend`` -> ``pause`` (a tool wait is a wait; the
+    cross-harness adjudication retired the old ``tool -> running`` fold);
+    unknown values degrade to ``default`` so a producer's vocabulary change
+    never invalidates the hint.
     """
     state = str(value or "").strip().lower()
     state = _STATE_FOLDS.get(state, state)
@@ -197,6 +207,67 @@ def service_query_url(base_url: str, *, prefix_id: str, user: str, model: str) -
     return f"{base_url.rstrip('/')}/v1/hints?{query}"
 
 
+def _normalize_cache_control(value: Any) -> Optional[dict]:
+    """Coerce a tier-supplied declaration into the single-object contract.
+
+    Legacy producers send an array (often with a retired ``pin`` entry); the
+    contract now allows exactly one object, so the last declaration wins and
+    ``pin`` becomes ``ephemeral``. ``msg_offset`` is filled from ``range.end``
+    when the producer only sent the range. Returns ``None`` when nothing valid
+    was supplied, which keeps the field absent instead of fabricated.
+    """
+    entries = value if isinstance(value, list) else [value]
+    chosen: Optional[dict] = None
+    for entry in entries:
+        if isinstance(entry, dict):
+            chosen = dict(entry)
+    if chosen is None:
+        return None
+    if chosen.get("type") == "pin":
+        chosen["type"] = "ephemeral"
+    span = chosen.get("range")
+    end = span.get("end") if isinstance(span, dict) else None
+    if isinstance(end, int) and not isinstance(end, bool):
+        chosen.setdefault("msg_offset", end)
+    return chosen
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _complete_cache_control(
+    declaration: Optional[dict],
+    prompt_messages: list,
+    merged: dict,
+) -> Optional[dict]:
+    """Fill the contract-required `ttl_s` / `msg_offset` a legacy tier omitted.
+
+    `cache_control` must be ``{type: "ephemeral", ttl_s, msg_offset}``; when a
+    credential or the hint service only supplied a shape (e.g. the retired
+    ``pin`` with a range), the missing values come from the same derivation the
+    plugin uses natively. A declaration whose TTL cannot be expressed at all is
+    dropped rather than sent half-formed.
+    """
+    if declaration is None:
+        return None
+    if not _is_int(declaration.get("ttl_s")):
+        baseline = derive_cache_control(prompt_messages, merged)
+        if baseline is not None:
+            declaration["ttl_s"] = baseline["ttl_s"]
+    if not _is_int(declaration.get("msg_offset")):
+        span = declaration.get("range")
+        end = span.get("end") if isinstance(span, dict) else None
+        declaration["msg_offset"] = (
+            end if _is_int(end) else logical_message_count(prompt_messages)
+        )
+    if not isinstance(declaration.get("range"), dict):
+        declaration["range"] = {"end": declaration["msg_offset"], "unit": "message"}
+    if not _is_int(declaration.get("ttl_s")):
+        return None
+    return declaration
+
+
 def _auto_pin_ttl_s(raw: Any) -> Optional[int]:
     """Positive integer TTL for the auto pin; invalid input degrades to a ttl-less pin."""
     if raw is None:
@@ -312,20 +383,33 @@ def build_hint(
         if isinstance(next_action_block, dict) and next_action_block.get("state") is not None:
             next_action_block["state"] = fold_state(next_action_block.get("state"))
 
+    # Prefix rewrite detection runs exactly once per request: the cache rules
+    # and ``session.state == "compact"`` read the same answer, and a second
+    # fingerprint call would compare the request against itself.
+    rewritten = prefix_rewritten(prefix_id, prompt_messages)
+
     # cache_control (opt-out via credential cache_pin=false), derived per the
     # cache-control guide: one ``ephemeral`` declaration with an explicit TTL.
     # The gap comes from the merged prediction (next tool expected duration ->
-    # measured inter-call interval -> 300 s fallback); ``range.end`` is the
-    # logical input count; nothing is declared below one 128-token block or on
-    # a rewritten prefix (compaction/branch). An explicit cache_pin_ttl_s
-    # overrides the derived TTL.
-    if credentials.get("cache_pin", "true").strip().lower() != "false" \
-            and "cache_control" not in merged:
+    # measured inter-call interval -> 300 s fallback); ``msg_offset`` /
+    # ``range.end`` are the logical input count; nothing is declared below one
+    # 128-token block or on a rewritten prefix (compaction/branch). An explicit
+    # cache_pin_ttl_s overrides the derived TTL.
+    if "cache_control" in merged:
+        # A higher tier (credential / hint service) supplied the declaration:
+        # normalize its shape instead of dropping the retention intent, then
+        # complete the fields the contract requires.
+        merged["cache_control"] = _complete_cache_control(
+            _normalize_cache_control(merged.get("cache_control")),
+            prompt_messages,
+            merged,
+        )
+    elif credentials.get("cache_pin", "true").strip().lower() != "false":
         # Cache prefixes belong to the node/system template, not the run: two
         # different workflow nodes naturally have different system prefixes and
         # must not be mistaken for a compaction rewrite. Key the fingerprint by
         # the content-derived prefix id (same value the hint service uses).
-        if not prefix_rewritten(prefix_id, prompt_messages):
+        if not rewritten:
             ttl_override = _auto_pin_ttl_s(credentials.get("cache_pin_ttl_s"))
             declaration = (
                 build_cache_control(
@@ -339,7 +423,7 @@ def build_hint(
                 else derive_cache_control(prompt_messages, merged)
             )
             if declaration is not None:
-                merged["cache_control"] = [declaration]
+                merged["cache_control"] = declaration
 
     # v2 two-value contract: only user_waiting is level 3; every other
     # reason is level 1. Applied after all tiers so service/node/legacy values
@@ -348,6 +432,38 @@ def build_hint(
     priority_block = merged.get("priority")
     if isinstance(priority_block, dict):
         normalize_priority_block(priority_block)
+        # Canonical location; the top-level `priority` stays as a compatibility
+        # mirror, and both always carry the same (normalized) pair.
+        merged["priority_control"] = {"priority": dict(priority_block)}
+
+    # session.state: the per-request lifecycle summary this stateless plugin
+    # can actually observe. `stop` is reserved for the lifecycle channel and is
+    # never sent on a request; a child session's first call is `append`, not
+    # `start` (only a root session opens with `start`).
+    session_block = merged.get("session")
+    if not isinstance(session_block, dict):
+        session_block = {"session_id": session_id}
+        merged["session"] = session_block
+    status_value = (
+        status_block.get("state") if isinstance(status_block, dict) else "running"
+    )
+    call_index = _as_int(session_block.get("call_index"))
+    has_parent = bool(session_block.get("parent_session_id"))
+    if status_value == "pause":
+        session_state = "pause"
+    elif rewritten:
+        session_state = "compact"
+    elif status_value == "resume":
+        session_state = "resume"
+    elif call_index == 1 and not has_parent:
+        session_state = "start"
+    else:
+        session_state = "append"
+    session_block["state"] = session_state
+    merged["context_management"] = {
+        "manage_request": "false",
+        "edits": [dict(edit) for edit in _CONTEXT_EDITS.get(session_state, ())],
+    }
 
     hint = AgentHint.model_validate(merged)
 

@@ -17,26 +17,34 @@ parameter `purpose=summary|compaction|title`; both the header and the optional
 
 ```jsonc
 {
-  "session": {
-    "session_id": "…",                    // required
-    "parent_session_id": "… | null",
+  "session": {                             // required block
+    "session_id": "…",                     // required
+    "parent_session_id": "… | null",       // key always present; null on roots
     "derivation": { "relation": "fork|spawn|handoff",
                     "join": "sync|async",
                     "fork_point": 0 },
     "agent_type": "…",
     "call_index": 1,
-    "epoch": 0
+    "epoch": 0,
+    "state": "start|pause|resume|compact|append"   // required; `stop` is event-only
   },
-  "agent_status": {                        // 4-value wire contract
+  "context_management": {                   // required block
+    "manage_request": "false",              // "true" = pure management request
+    "edits": [{ "type": "offload|prefetch|evict", "target": "session" }]
+  },
+  "agent_status": {                         // 4-value wire contract
     "state": "running|pause|resume|finalize",
     "state_since_ms": 0,
     "reason": "await_tool|human_approval|…",
     "tools": [{ "name": "…", "call_id": "…", "child_session_id": "…" }]
   },
-  "priority":        { "level": 1, "reason": "user_waiting|critical_path|background" },
-  "strict_priority": { "level": 1, "reason": "…" },   // trusted control plane only
-  "cache_control": [ { "type": "ephemeral", "ttl_s": 240,
-                       "range": { "end": 1, "unit": "message" } } ],
+  "priority":         { "level": 1, "reason": "user_waiting|critical_path|background" },
+  "priority_control": { "priority": { "level": 1, "reason": "…" } },  // required block
+  "strict_priority":  { "level": 1, "reason": "…" },   // trusted control plane only
+  "cache_control": {                        // required block, single object
+    "type": "ephemeral", "ttl_s": 240, "msg_offset": 1,
+    "range": { "end": 1, "unit": "message" }           // msg_offset == range.end
+  },
   "prediction": {
     "latency_ms": 0, "remaining_calls": 0, "output_tokens": 0,
     "interval_ms": 0, "remaining_time_ms": 0, "expected_resume_s": 0,
@@ -47,8 +55,30 @@ parameter `purpose=summary|compaction|title`; both the header and the optional
 }
 ```
 
-All fields are optional except `session.session_id`; absent sources mean
-absent fields (`exclude_none`), never fabricated values.
+`session`, `context_management`, `priority_control` and `cache_control` are the
+required subset; a hint missing one of them is non-compliant. Producers may add
+fields (they are ignored). `parent_session_id` is the one optional-looking key
+that must exist: `null` says "this is a root", absence would be an unknown.
+`cache_control` may be omitted only where the retention guide says "don't
+declare"; `ttl_s` is advisory, never a promise.
+
+`session.state` mapping used by this stateless plugin:
+
+| value | when |
+|---|---|
+| `pause` | `agent_status.state == "pause"` (a tool wait or a human wait) |
+| `compact` | the first request whose prefix was rewritten (count shrink / new first message) |
+| `resume` | `agent_status.state == "resume"` (first request after a release) |
+| `start` | a known first call (`call_index == 1`) of a root session |
+| `append` | default |
+
+`context_management.edits` is derived from that state — `pause → offload`,
+`resume → prefetch`, `compact → evict`, otherwise empty — and `target` is
+always `session`. Every request here is a request the agent was going to send,
+so `manage_request` is always the string `"false"`.
+
+Everything else is optional: absent sources mean absent fields
+(`exclude_none`), never fabricated values.
 
 ## Where each field comes from
 
@@ -59,13 +89,16 @@ absent fields (`exclude_none`), never fabricated values.
 | `session.call_index` | — | ✅ | per-session call ordinal |
 | `session.parent_session_id` / `derivation` | — | ✅ | multi-agent orchestration data |
 | `session.epoch` | — | ✅ | context version after rewrites |
+| `session.state` | ✅ derived from `agent_status`, the prefix fingerprint and the call ordinal | — | six-value vocabulary; `stop` stays on the event channel |
+| `context_management` | ✅ always present; edits expand from `session.state` | — | `manage_request` is always `"false"` here |
+| `priority_control` | ✅ mirror of the normalized `priority` block | — | canonical location; top-level `priority` kept for compatibility |
 | `priority` | ✅ plugin-native trigger classification + `run_mode` + node param + `hints_json` | ✅ optional step priority | reason-driven: `user_waiting` = 3, `critical_path`/`background` = 1; service/node values normalized to the same pair |
 | `strict_priority` | — | ✅ (control plane) | agents never set it |
-| `cache_control` | ✅ derived `ephemeral` + TTL per the guide; `cache_pin=false` disables; `cache_pin_ttl_s` overrides the derived TTL | ✅ | TTL = `clamp(gap*2, 60, 3600)`, `gap` from next-tool p90 / interval / 300 s; `end` = logical input count; omitted below 128 tokens or on a rewritten prefix |
+| `cache_control` | ✅ derived `ephemeral` + TTL per the guide; `cache_pin=false` disables; `cache_pin_ttl_s` overrides the derived TTL | ✅ (arrays and retired `pin` are normalized into one object) | single object: TTL = `clamp(gap*2, 60, 3600)`, `gap` from next-tool p90 / interval / 300 s; `msg_offset == range.end` = logical input count; omitted below 128 tokens or on a rewritten prefix |
 | `prediction.output_tokens` / `interval_ms` | ✅ node params (`osl` / `iat`) | ✅ | |
 | `prediction.latency_ms` / `remaining_calls` / `remaining_time_ms` / `expected_resume_s` | — | ✅ | measured statistics |
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |
-| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract (`AGENT_STATUS_STATE_DESIGN.md` v1.0); `reason`/`tools` ride the **status event channel** (§4) |
+| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract (`AGENT_STATUS_STATE_DESIGN.md` v1.0; `tool → pause` per the cross-harness adjudication); `reason`/`tools` ride the **status event channel** (§4) |
 
 ## Two-value level domain (v2)
 
