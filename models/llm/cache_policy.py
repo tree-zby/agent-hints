@@ -152,9 +152,12 @@ def build_cache_control(
         return None
     if not isinstance(ttl_s, int) or ttl_s <= 0:
         return None
+    # 单对象契约：一条声明。``msg_offset`` 是 1-based 生效点，与 ``range.end``
+    # 同值；内嵌 ``range`` 保留给仍按旧形态读取的消费方。
     return {
         "type": "ephemeral",
         "ttl_s": max(TTL_MIN_S, min(TTL_MAX_S, ttl_s)),
+        "msg_offset": logical_count,
         "range": {"end": logical_count, "unit": "message"},
     }
 

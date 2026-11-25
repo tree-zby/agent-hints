@@ -13,18 +13,26 @@ agreed cross-harness schema**:
 
 ```jsonc
 {
-  "session": {
+  "session": {                             // required
     "session_id": "…",                     // stable within one context
-    "parent_session_id": "… | null",
+    "parent_session_id": "… | null",       // null on root sessions
     "derivation": { "relation": "fork|spawn|handoff", "join": "sync|async" },
     "agent_type": "…",                     // role / step identity
     "call_index": 1,                       // per-session call ordinal
-    "epoch": 0                             // context version
+    "epoch": 0,                            // context version
+    "state": "start|pause|resume|compact|append"
   },
-  "priority":        { "level": 3, "reason": "user_waiting" },
-  "strict_priority": { "level": 1, "reason": "…" },   // control plane only
-  "cache_control": [ { "type": "ephemeral", "ttl_s": 240,
-                       "range": { "end": 1, "unit": "message" } } ],
+  "context_management": {                  // required
+    "manage_request": "false",
+    "edits": []                            // offload / prefetch / evict from state
+  },
+  "priority":         { "level": 3, "reason": "user_waiting" },
+  "priority_control": { "priority": { "level": 3, "reason": "user_waiting" } },  // required
+  "strict_priority":  { "level": 1, "reason": "…" },   // control plane only
+  "cache_control": {                       // required, single object
+    "type": "ephemeral", "ttl_s": 240, "msg_offset": 1,
+    "range": { "end": 1, "unit": "message" }             // msg_offset == range.end
+  },
   "prediction": {
     "latency_ms": 0, "remaining_calls": 0, "output_tokens": 0,
     "interval_ms": 0, "remaining_time_ms": 0, "expected_resume_s": 0,
@@ -35,10 +43,16 @@ agreed cross-harness schema**:
 }
 ```
 
+`session`, `context_management`, `priority_control` and `cache_control` are the
+required blocks; the rest is derived from whatever the sources actually know
+(nothing is fabricated). `session.state` summarizes the request
+(`start / pause / resume / compact / append`; `stop` stays on the lifecycle
+channel) and `context_management.edits` expands from it.
+
 Field-by-field reference and data-source matrix:
-**[docs/SCHEMA.md](docs/SCHEMA.md)**. Lifecycle states (`running / tool /
-pause / suspend / finalize`) are reported on a separate status-event channel,
-not inside model requests.
+**[docs/SCHEMA.md](docs/SCHEMA.md)**. Detailed lifecycle events (`running /
+tool / pause / suspend / finalize`, with `tool` folded to `pause` on the wire)
+are reported on a separate status-event channel, not inside model requests.
 
 ## The compatibility projection: nvext.agent_hints (NVIDIA Dynamo)
 

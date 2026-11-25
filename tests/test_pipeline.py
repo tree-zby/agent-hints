@@ -208,9 +208,9 @@ LONG = "cache block " * 120  # ~360 tokens
 
 def test_cache_control_derived_default_and_off():
     hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, dict(CREDS_BASE))
-    assert hint.cache_control == [hint_mod.CacheControlHint(
-        type="ephemeral", ttl_s=600,
-        range=hint_mod.HintRange(end=1, unit="message"))]
+    assert hint.cache_control == hint_mod.CacheControlHint(
+        type="ephemeral", ttl_s=600, msg_offset=1,
+        range=hint_mod.HintRange(end=1, unit="message"))
     creds = dict(CREDS_BASE, cache_pin="false")
     hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
     assert hint.cache_control is None
@@ -225,8 +225,8 @@ def test_cache_control_ttl_from_prediction_interval():
     creds = dict(CREDS_BASE,
                  hints_json=json.dumps({"prediction": {"interval_ms": 120000}}))
     hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
-    assert hint.cache_control[0].type == "ephemeral"
-    assert hint.cache_control[0].ttl_s == 240  # 120 s gap * 2
+    assert hint.cache_control.type == "ephemeral"
+    assert hint.cache_control.ttl_s == 240  # 120 s gap * 2
 
 
 def test_cache_control_ttl_from_next_tool_expected_duration():
@@ -235,17 +235,17 @@ def test_cache_control_ttl_from_next_tool_expected_duration():
             "state": "tool",
             "tools": [{"name": "t", "expected_duration_s": 120}]}}}))
     hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
-    assert hint.cache_control[0].ttl_s == 240
+    assert hint.cache_control.ttl_s == 240
 
 
 def test_cache_control_explicit_ttl_override_and_invalid_fallback():
     creds = dict(CREDS_BASE, cache_pin_ttl_s="600")
     hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
-    assert hint.cache_control[0].ttl_s == 600
+    assert hint.cache_control.ttl_s == 600
     for raw in ("abc", "0", "-5", ""):
         creds = dict(CREDS_BASE, cache_pin_ttl_s=raw)
         hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, creds)
-        assert hint.cache_control[0].ttl_s == 600  # derived fallback
+        assert hint.cache_control.ttl_s == 600  # derived fallback
 
 
 def test_cache_control_skips_prefix_rewrite():
@@ -274,11 +274,18 @@ def test_cache_control_distinct_prefixes_are_not_a_rewrite():
 
 def test_cache_control_from_service_not_overwritten():
     def fake_fetch(url, timeout):
-        return {"cache_control": [{"type": "ephemeral", "ttl_s": 30}]}
+        # Legacy array + retired `pin` shape from an older producer.
+        return {"cache_control": [
+            {"type": "pin", "range": {"end": 1}},
+            {"type": "ephemeral", "ttl_s": 30, "range": {"end": 1}},
+        ]}
 
     creds = dict(CREDS_BASE, hint_service_url="http://hs")
     hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds, fetch_fn=fake_fetch)
-    assert hint.cache_control[0].type == "ephemeral"
+    assert hint.cache_control.type == "ephemeral"
+    assert hint.cache_control.ttl_s == 30
+    # 数组收敛为最后一个声明，并补上 msg_offset（= range.end）。
+    assert hint.cache_control.msg_offset == 1
 
 
 # ---------------------------------------------------------------------------
@@ -423,3 +430,66 @@ def test_build_body_hints_do_not_pollute_messages():
                               nvext={"priority": 1})
     assert body["messages"] == messages  # prompt stays untouched
     assert body["stop"] == ["stop1"]
+
+
+# ---------------------------------------------------------------------------
+# four-block contract: session.state / context_management / priority_control
+# ---------------------------------------------------------------------------
+def test_four_blocks_are_always_present():
+    hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, dict(CREDS_BASE))
+    dump = hint.model_dump(exclude_none=True)
+    for block in ("session", "context_management", "priority_control", "cache_control"):
+        assert block in dump, f"{block} must be on the wire"
+    assert hint.session.state == "append"  # a stateless provider cannot claim call 1
+    assert hint.context_management.manage_request == "false"
+    assert hint.context_management.edits == []
+    assert hint.priority_control.priority == hint.priority
+    assert hint.cache_control.msg_offset == hint.cache_control.range.end == 1
+
+
+def test_session_state_start_only_for_known_root_first_call():
+    creds = dict(CREDS_BASE, hints_json=json.dumps({"session": {"call_index": 1}}))
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
+    assert hint.session.state == "start"
+
+    creds = dict(CREDS_BASE, hints_json=json.dumps(
+        {"session": {"call_index": 1, "parent_session_id": "s-root01"}}))
+    hint, _ = pipeline_mod.build_hint([sys_msg("s")], {}, creds)
+    assert hint.session.state == "append"  # a child session never opens with start
+
+
+def test_session_state_follows_pause_and_resume_with_edits():
+    creds = dict(CREDS_BASE, hint_service_url="http://hs")
+
+    hint, _ = pipeline_mod.build_hint(
+        [sys_msg("s")], {}, creds,
+        fetch_fn=lambda url, timeout: {"agent_status": {"state": "tool"}},
+    )
+    assert hint.agent_status.state == "pause"
+    assert hint.session.state == "pause"
+    assert [edit.type for edit in hint.context_management.edits] == ["offload"]
+    assert hint.context_management.edits[0].target == "session"
+
+    hint, _ = pipeline_mod.build_hint(
+        [sys_msg("s")], {}, creds,
+        fetch_fn=lambda url, timeout: {"agent_status": {"state": "resume"}},
+    )
+    assert hint.session.state == "resume"
+    assert [edit.type for edit in hint.context_management.edits] == ["prefetch"]
+
+
+def test_session_state_compact_after_prefix_rewrite():
+    long_system = "rewrite block " * 120
+    base = [sys_msg(long_system), msg("user", "one"), msg("user", "two")]
+    hint, _ = pipeline_mod.build_hint(base, {}, dict(CREDS_BASE), user="sess-rewrite")
+    assert hint.session.state == "append"
+
+    shrunk = [sys_msg(long_system), msg("user", "one")]
+    hint, _ = pipeline_mod.build_hint(shrunk, {}, dict(CREDS_BASE), user="sess-rewrite")
+    assert hint.session.state == "compact"
+    assert [edit.type for edit in hint.context_management.edits] == ["evict"]
+    assert hint.cache_control is None  # the guide says "don't declare" after a rewrite
+
+    again = [sys_msg(long_system), msg("user", "one"), msg("user", "three")]
+    hint, _ = pipeline_mod.build_hint(again, {}, dict(CREDS_BASE), user="sess-rewrite")
+    assert hint.session.state == "append"  # the rewrite edge is one-shot
