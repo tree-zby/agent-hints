@@ -11,10 +11,12 @@ Output priority level is folded into the two-value domain {1, 3} (v2 contract:
 normalize_priority_level).
 
 Outputs:
-  - AgentHint object -> X-Agent-Hint header (UTF-8 JSON -> base64url), full
-    agreed schema (see docs/SCHEMA.md). The four required blocks are always
-    present: ``session.state``, ``context_management``, ``priority_control``,
-    and a single-object ``cache_control``
+  - AgentHint object -> X-Agent-Hint header (UTF-8 JSON -> base64url), the
+    ordinary-request profile (see docs/SCHEMA.md): ``session`` (``state`` is
+    only ``start`` / ``append``), ``priority_control`` and, when qualified, a
+    single-object ``cache_control``. ``context_management`` is reserved for
+    manage requests and is never emitted here (this model provider has no
+    lifecycle trigger; protocol §5.3 / §12.4).
   - nvext.agent_hints request-body projection (NVIDIA Dynamo v1.5.1:
     priority only, higher values have higher priority)
 
@@ -37,6 +39,7 @@ from .cache_policy import (
     derive_cache_control,
     estimate_tokens,
     logical_message_count,
+    observe_prefix_epoch,
     prefix_rewritten,
 )
 from .hint import AgentHint
@@ -46,13 +49,6 @@ FetchFn = Callable[[str, float], Optional[dict]]
 
 _WIRE_STATES = frozenset({"running", "pause", "resume", "finalize"})
 _STATE_FOLDS = {"tool": "pause", "suspend": "pause"}
-
-# `context_management.edits` expands one edit from `session.state`.
-_CONTEXT_EDITS = {
-    "pause": ({"type": "offload", "target": "session"},),
-    "resume": ({"type": "prefetch", "target": "session"},),
-    "compact": ({"type": "evict", "target": "session"},),
-}
 
 
 def fold_state(value: Any, *, default: str = "running") -> str:
@@ -436,34 +432,29 @@ def build_hint(
         # mirror, and both always carry the same (normalized) pair.
         merged["priority_control"] = {"priority": dict(priority_block)}
 
-    # session.state: the per-request lifecycle summary this stateless plugin
-    # can actually observe. `stop` is reserved for the lifecycle channel and is
-    # never sent on a request; a child session's first call is `append`, not
-    # `start` (only a root session opens with `start`).
+    # session.state: ordinary requests may only carry `start` or `append`
+    # (protocol §5.2). Lifecycle verbs (`pause` / `resume` / `stop` /
+    # `compact`) belong on separate manage requests, which this model provider
+    # cannot emit — it never observes a lifecycle trigger.
     session_block = merged.get("session")
     if not isinstance(session_block, dict):
         session_block = {"session_id": session_id}
         merged["session"] = session_block
-    status_value = (
-        status_block.get("state") if isinstance(status_block, dict) else "running"
-    )
     call_index = _as_int(session_block.get("call_index"))
     has_parent = bool(session_block.get("parent_session_id"))
-    if status_value == "pause":
-        session_state = "pause"
-    elif rewritten:
-        session_state = "compact"
-    elif status_value == "resume":
-        session_state = "resume"
-    elif call_index == 1 and not has_parent:
-        session_state = "start"
-    else:
-        session_state = "append"
-    session_block["state"] = session_state
-    merged["context_management"] = {
-        "manage_request": "false",
-        "edits": [dict(edit) for edit in _CONTEXT_EDITS.get(session_state, ())],
-    }
+    # A committed rewrite is expressed on an ordinary request as an epoch bump
+    # (protocol §6.3); the matching manage request (which would carry the old
+    # epoch) is not emitted by this L1 model provider. The fingerprint table is
+    # real rewrite evidence, so the bump is not fabricated. The local epoch is
+    # kept per prefix across requests and never goes backwards.
+    epoch = observe_prefix_epoch(
+        prefix_id, _as_int(session_block.get("epoch")), rewritten
+    )
+    if epoch is not None:
+        session_block["epoch"] = epoch
+    session_block["state"] = (
+        "start" if call_index == 1 and not has_parent else "append"
+    )
 
     hint = AgentHint.model_validate(merged)
 

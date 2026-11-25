@@ -1,8 +1,8 @@
 # Agent Hint Schema — full field reference
 
-The `X-Agent-Hint` header emitted by this plugin carries the **complete
-agreed cross-harness schema**, field-for-field pinned by a cross-language
-golden vector in `tests/test_schema_golden.py`.
+The `X-Agent-Hint` header emitted by this plugin carries the **ordinary-request
+profile** of the v1 cross-harness contract, pinned by a cross-language golden
+vector in `tests/test_schema_golden.py`.
 
 Wire form: AgentHint object → UTF-8 JSON → base64url (unpadded) →
 `X-Agent-Hint` HTTP header. The model request body stays a standard
@@ -26,13 +26,9 @@ parameter `purpose=summary|compaction|title`; both the header and the optional
     "agent_type": "…",
     "call_index": 1,
     "epoch": 0,
-    "state": "start|pause|resume|compact|append"   // required; `stop` is event-only
+    "state": "start|append"                // required; ordinary requests only
   },
-  "context_management": {                   // required block
-    "manage_request": "false",              // "true" = pure management request
-    "edits": [{ "type": "offload|prefetch|evict", "target": "session" }]
-  },
-  "agent_status": {                         // 4-value wire contract
+  "agent_status": {                         // 4-value wire contract (superset)
     "state": "running|pause|resume|finalize",
     "state_since_ms": 0,
     "reason": "await_tool|human_approval|…",
@@ -41,7 +37,7 @@ parameter `purpose=summary|compaction|title`; both the header and the optional
   "priority":         { "level": 1, "reason": "user_waiting|critical_path|background" },
   "priority_control": { "priority": { "level": 1, "reason": "…" } },  // required block
   "strict_priority":  { "level": 1, "reason": "…" },   // trusted control plane only
-  "cache_control": {                        // required block, single object
+  "cache_control": {                        // single object, when qualified
     "type": "ephemeral", "ttl_s": 240, "msg_offset": 1,
     "range": { "end": 1, "unit": "message" }           // msg_offset == range.end
   },
@@ -55,27 +51,32 @@ parameter `purpose=summary|compaction|title`; both the header and the optional
 }
 ```
 
-`session`, `context_management`, `priority_control` and `cache_control` are the
-required subset; a hint missing one of them is non-compliant. Producers may add
-fields (they are ignored). `parent_session_id` is the one optional-looking key
-that must exist: `null` says "this is a root", absence would be an unknown.
-`cache_control` may be omitted only where the retention guide says "don't
-declare"; `ttl_s` is advisory, never a promise.
+`session` and `priority_control` are required on every main-line request; a
+hint missing either is non-compliant. `cache_control` is present only when a
+retention declaration qualifies. Producers may add fields (consumers ignore
+unknown keys). `parent_session_id` is the one optional-looking key that must
+exist: `null` says "this is a root", absence would be an unknown. `ttl_s` is
+advisory, never a promise.
 
-`session.state` mapping used by this stateless plugin:
+`session.state` values used by this stateless plugin:
 
 | value | when |
 |---|---|
-| `pause` | `agent_status.state == "pause"` (a tool wait or a human wait) |
-| `compact` | the first request whose prefix was rewritten (count shrink / new first message) |
-| `resume` | `agent_status.state == "resume"` (first request after a release) |
 | `start` | a known first call (`call_index == 1`) of a root session |
-| `append` | default |
+| `append` | default; every other main-line request |
 
-`context_management.edits` is derived from that state — `pause → offload`,
-`resume → prefetch`, `compact → evict`, otherwise empty — and `target` is
-always `session`. Every request here is a request the agent was going to send,
-so `manage_request` is always the string `"false"`.
+Lifecycle verbs (`pause` / `resume` / `stop` / `compact`) are **not** emitted
+on ordinary requests. They belong on separate manage requests together with
+`context_management` (`manage_request: true` + exactly one explicit edit,
+protocol §5.3/§8.3). A model provider never observes a session lifecycle
+trigger, so this plugin implements the L1 profile and leaves manage traffic to
+a harness that owns the session (protocol §12.4). `build_manage_hint()` in
+`models/llm/hint.py` pins the manage wire shape for consumers and tests.
+
+A committed prefix rewrite is expressed on the next ordinary request as an
+`epoch + 1` bump plus a one-round cache suppression (protocol §6.3); the
+matching `compact` manage request, which would carry the old epoch, is not
+sent by this plugin.
 
 Everything else is optional: absent sources mean absent fields
 (`exclude_none`), never fabricated values.
@@ -88,9 +89,9 @@ Everything else is optional: absent sources mean absent fields
 | `session.agent_type` | ✅ `hints_json` | ✅ | role/step identity |
 | `session.call_index` | — | ✅ | per-session call ordinal |
 | `session.parent_session_id` / `derivation` | — | ✅ | multi-agent orchestration data |
-| `session.epoch` | — | ✅ | context version after rewrites |
-| `session.state` | ✅ derived from `agent_status`, the prefix fingerprint and the call ordinal | — | six-value vocabulary; `stop` stays on the event channel |
-| `context_management` | ✅ always present; edits expand from `session.state` | — | `manage_request` is always `"false"` here |
+| `session.epoch` | ✅ +1 on an observed prefix rewrite | ✅ | context version after rewrites |
+| `session.state` | ✅ derived from the call ordinal | — | `start` / `append` only (ordinary profile) |
+| `context_management` | — | — | manage requests only; this plugin emits none (L1) |
 | `priority_control` | ✅ mirror of the normalized `priority` block | — | canonical location; top-level `priority` kept for compatibility |
 | `priority` | ✅ plugin-native trigger classification + `run_mode` + node param + `hints_json` | ✅ optional step priority | reason-driven: `user_waiting` = 3, `critical_path`/`background` = 1; service/node values normalized to the same pair |
 | `strict_priority` | — | ✅ (control plane) | agents never set it |
@@ -98,7 +99,7 @@ Everything else is optional: absent sources mean absent fields
 | `prediction.output_tokens` / `interval_ms` | ✅ node params (`osl` / `iat`) | ✅ | |
 | `prediction.latency_ms` / `remaining_calls` / `remaining_time_ms` / `expected_resume_s` | — | ✅ | measured statistics |
 | `prediction.next_action` | — | ✅ | compile-time/orchestrator knowledge |
-| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract (`AGENT_STATUS_STATE_DESIGN.md` v1.0; `tool → pause` per the cross-harness adjudication); `reason`/`tools` ride the **status event channel** (§4) |
+| `agent_status` | ✅ default `running` + `state_since_ms`; any producer's `tool`/`suspend` folds to `pause` | ✅ run-scoped override (incl. `resume`) | 4-value wire contract; a tolerated superset field (consumers ignore it) |
 
 ## Two-value level domain (v2)
 

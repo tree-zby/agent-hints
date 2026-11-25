@@ -1,9 +1,10 @@
 """Golden interop tests — cross-language pin for the Agent Hint schema.
 
-The vector was re-pinned when the four-block contract landed: `session.state`,
-`context_management`, `priority_control` and a single-object `cache_control`
-are now required, so the previous array/`pin` vector no longer describes a
-valid hint. Encoding/decoding behavior is unchanged (UTF-8 JSON -> base64url).
+The vector was re-pinned for the v1 ordinary-request profile: an ordinary hint
+carries `session` (state `start`/`append`) + `priority_control` + an optional
+single-object `cache_control`; `context_management` belongs to manage requests
+only and is absent here. Encoding/decoding behavior is unchanged (UTF-8 JSON
+-> base64url).
 """
 from tests.conftest import hint_mod  # noqa: F401
 
@@ -14,16 +15,15 @@ TS_GOLDEN = (
     "eyJzZXNzaW9uIjp7InNlc3Npb25faWQiOiJzLTdmM2EyYyIsInBhcmVudF9zZXNzaW9uX2lkIjoi"
     "cy1yb290MDEiLCJkZXJpdmF0aW9uIjp7InJlbGF0aW9uIjoic3Bhd24iLCJqb2luIjoic3luYyJ9"
     "LCJhZ2VudF90eXBlIjoicmVzZWFyY2hlciIsImNhbGxfaW5kZXgiOjIsImVwb2NoIjowLCJzdGF0"
-    "ZSI6ImFwcGVuZCJ9LCJjb250ZXh0X21hbmFnZW1lbnQiOnsibWFuYWdlX3JlcXVlc3QiOiJmYWxz"
-    "ZSIsImVkaXRzIjpbXX0sImFnZW50X3N0YXR1cyI6eyJzdGF0ZSI6InJ1bm5pbmciLCJzdGF0ZV9z"
-    "aW5jZV9tcyI6MTc5MDAwMDAwMDAwMH0sInByZWRpY3Rpb24iOnsicmVtYWluaW5nX2NhbGxzIjoz"
-    "LCJvdXRwdXRfdG9rZW5zIjo0MjAsImludGVydmFsX21zIjoxMTgwMCwibGF0ZW5jeV9tcyI6NDEw"
-    "MCwibmV4dF9hY3Rpb24iOnsic3RhdGUiOiJydW5uaW5nIiwidG9vbHMiOlt7Im5hbWUiOiJ3ZWJf"
-    "c2VhcmNoIiwiZXhwZWN0ZWRfZHVyYXRpb25fcyI6OH1dLCJwcm9iIjowLjg1fX0sInByaW9yaXR5"
-    "Ijp7ImxldmVsIjozLCJyZWFzb24iOiJjcml0aWNhbF9wYXRoIn0sInByaW9yaXR5X2NvbnRyb2wi"
-    "OnsicHJpb3JpdHkiOnsibGV2ZWwiOjMsInJlYXNvbiI6ImNyaXRpY2FsX3BhdGgifX0sImNhY2hl"
-    "X2NvbnRyb2wiOnsidHlwZSI6ImVwaGVtZXJhbCIsInR0bF9zIjoxMiwibXNnX29mZnNldCI6MTAs"
-    "InJhbmdlIjp7ImVuZCI6MTAsInVuaXQiOiJtZXNzYWdlIn19fQ"
+    "ZSI6ImFwcGVuZCJ9LCJhZ2VudF9zdGF0dXMiOnsic3RhdGUiOiJydW5uaW5nIiwic3RhdGVfc2lu"
+    "Y2VfbXMiOjE3OTAwMDAwMDAwMDB9LCJwcmlvcml0eSI6eyJsZXZlbCI6MywicmVhc29uIjoiY3Jp"
+    "dGljYWxfcGF0aCJ9LCJwcmlvcml0eV9jb250cm9sIjp7InByaW9yaXR5Ijp7ImxldmVsIjozLCJy"
+    "ZWFzb24iOiJjcml0aWNhbF9wYXRoIn19LCJjYWNoZV9jb250cm9sIjp7InR5cGUiOiJlcGhlbWVy"
+    "YWwiLCJ0dGxfcyI6MTIsIm1zZ19vZmZzZXQiOjEwLCJyYW5nZSI6eyJlbmQiOjEwLCJ1bml0Ijoi"
+    "bWVzc2FnZSJ9fSwicHJlZGljdGlvbiI6eyJsYXRlbmN5X21zIjo0MTAwLCJyZW1haW5pbmdfY2Fs"
+    "bHMiOjMsIm91dHB1dF90b2tlbnMiOjQyMCwiaW50ZXJ2YWxfbXMiOjExODAwLCJuZXh0X2FjdGlv"
+    "biI6eyJzdGF0ZSI6InJ1bm5pbmciLCJ0b29scyI6W3sibmFtZSI6IndlYl9zZWFyY2giLCJleHBl"
+    "Y3RlZF9kdXJhdGlvbl9zIjo4LjB9XSwicHJvYiI6MC44NX19fQ"
 )
 
 
@@ -37,7 +37,6 @@ TS_FULL_DICT = {
         "epoch": 0,
         "state": "append",
     },
-    "context_management": {"manage_request": "false", "edits": []},
     "agent_status": {"state": "running", "state_since_ms": 1790000000000},
     "prediction": {
         "remaining_calls": 3,
@@ -84,7 +83,6 @@ def test_root_session_publishes_explicit_null_parent():
     """`exclude_none` must not drop the key: null means "this is a root"."""
     hint = hint_mod.AgentHint(
         session={"session_id": "s-root", "state": "start"},
-        context_management={"manage_request": "false", "edits": []},
     )
     encoded = hint_mod.encode_agent_hint(hint)
     padded = encoded + "=" * (-len(encoded) % 4)
@@ -92,19 +90,74 @@ def test_root_session_publishes_explicit_null_parent():
     assert "parent_session_id" in wire["session"]
     assert wire["session"]["parent_session_id"] is None
     assert wire["session"]["state"] == "start"
-    assert wire["context_management"] == {"manage_request": "false", "edits": []}
+    assert "context_management" not in wire
 
 
 def test_missing_required_blocks_are_rejected():
     """Missing = non-compliant, not "default to something reasonable"."""
     try:
-        hint_mod.AgentHint.model_validate({"session": {"session_id": "s"}})
+        hint_mod.AgentHint.model_validate({})
     except Exception as exc:  # pydantic.ValidationError
-        message = str(exc)
-        assert "session.state" in message
-        assert "context_management" in message
+        assert "session" in str(exc)
     else:  # pragma: no cover - the assertion below explains the failure
         raise AssertionError("a hint without the required blocks must not validate")
+
+    try:
+        hint_mod.AgentHint.model_validate({"session": {"session_id": "s"}})
+    except Exception as exc:  # pydantic.ValidationError
+        assert "session.state" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("session.state is mandatory")
+
+
+def test_manage_hint_carries_boolean_flag_and_one_explicit_edit():
+    """Manage requests: `manage_request: true` + exactly one typed edit."""
+    hint = hint_mod.build_manage_hint(
+        session_id="s-7f3a2c",
+        state="compact",
+        call_index=2,
+        epoch=0,
+    )
+    encoded = hint_mod.encode_agent_hint(hint)
+    padded = encoded + "=" * (-len(encoded) % 4)
+    wire = json.loads(base64.urlsafe_b64decode(padded))
+    assert wire["session"]["state"] == "compact"
+    assert wire["context_management"] == {
+        "manage_request": True,
+        "edits": [{"type": "evict", "target": "session"}],
+    }
+    assert "priority_control" not in wire
+    assert "cache_control" not in wire
+    assert "agent_status" not in wire
+
+
+def test_manage_request_must_be_boolean_true_and_exactly_one_edit():
+    for value in ("true", "false", False):
+        try:
+            hint_mod.AgentHint.model_validate(
+                {
+                    "session": {"session_id": "s", "state": "pause"},
+                    "context_management": {
+                        "manage_request": value,
+                        "edits": [{"type": "offload"}],
+                    },
+                }
+            )
+        except Exception:  # pydantic.ValidationError
+            continue
+        raise AssertionError(f"manage_request={value!r} must not validate")
+
+    try:
+        hint_mod.AgentHint.model_validate(
+            {
+                "session": {"session_id": "s", "state": "pause"},
+                "context_management": {"manage_request": True, "edits": []},
+            }
+        )
+    except Exception:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("a manage hint must carry exactly one edit")
 
 
 def test_header_name_matches_spec():

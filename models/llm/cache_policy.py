@@ -27,6 +27,9 @@ TTL_FACTOR = 2.0
 _MAX_TRACKED_SESSIONS = 4096
 _LOCK = threading.Lock()
 _PREFIX_FINGERPRINTS: dict[str, tuple[int, str]] = {}
+# Effective epoch per prefix: survives across requests so a rewrite observed in
+# one request and the follow-up request agree on the same (bumped) value.
+_PREFIX_EPOCHS: dict[str, int] = {}
 
 
 def estimate_ttl_s(
@@ -133,10 +136,40 @@ def prefix_rewritten(prefix_key: str, messages: list[Any]) -> bool:
     )
 
 
+def observe_prefix_epoch(
+    prefix_key: str,
+    source_epoch: Optional[int],
+    rewritten: bool,
+) -> Optional[int]:
+    """Return the effective, monotonic ``session.epoch`` for this prefix.
+
+    The plugin is stateless across requests, so the epoch is tracked per prefix
+    in-process: a higher source epoch (credential / hint service) wins, a
+    detected rewrite adds exactly one, and the value is never allowed to go
+    backwards. Returns ``None`` when nothing is known and no rewrite happened
+    (the field is then omitted rather than fabricated).
+    """
+    if not prefix_key:
+        return source_epoch
+    with _LOCK:
+        previous = _PREFIX_EPOCHS.get(prefix_key)
+        if previous is None and source_epoch is None and not rewritten:
+            return None
+        base = previous if previous is not None else 0
+        if source_epoch is not None:
+            base = max(base, source_epoch)
+        epoch = base + 1 if rewritten else base
+        if len(_PREFIX_EPOCHS) >= _MAX_TRACKED_SESSIONS:
+            _PREFIX_EPOCHS.clear()
+        _PREFIX_EPOCHS[prefix_key] = epoch
+        return epoch
+
+
 def reset_prefix_tracking() -> None:
-    """Drop the in-process fingerprint table (tests / tenant switch)."""
+    """Drop the in-process fingerprint/epoch tables (tests / tenant switch)."""
     with _LOCK:
         _PREFIX_FINGERPRINTS.clear()
+        _PREFIX_EPOCHS.clear()
 
 
 def build_cache_control(

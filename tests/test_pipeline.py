@@ -433,16 +433,16 @@ def test_build_body_hints_do_not_pollute_messages():
 
 
 # ---------------------------------------------------------------------------
-# four-block contract: session.state / context_management / priority_control
+# ordinary-request profile: session.state / priority_control / cache_control
 # ---------------------------------------------------------------------------
-def test_four_blocks_are_always_present():
+def test_ordinary_hint_blocks_and_no_manage_block():
     hint, _ = pipeline_mod.build_hint([sys_msg(LONG)], {}, dict(CREDS_BASE))
     dump = hint.model_dump(exclude_none=True)
-    for block in ("session", "context_management", "priority_control", "cache_control"):
+    for block in ("session", "priority_control", "cache_control"):
         assert block in dump, f"{block} must be on the wire"
+    # `context_management` belongs to manage requests only (protocol §5.3).
+    assert "context_management" not in dump
     assert hint.session.state == "append"  # a stateless provider cannot claim call 1
-    assert hint.context_management.manage_request == "false"
-    assert hint.context_management.edits == []
     assert hint.priority_control.priority == hint.priority
     assert hint.cache_control.msg_offset == hint.cache_control.range.end == 1
 
@@ -458,38 +458,54 @@ def test_session_state_start_only_for_known_root_first_call():
     assert hint.session.state == "append"  # a child session never opens with start
 
 
-def test_session_state_follows_pause_and_resume_with_edits():
+def test_agent_status_waits_do_not_leak_into_session_state():
+    """Tool/approval waits keep `session.state` ordinary (`append`)."""
     creds = dict(CREDS_BASE, hint_service_url="http://hs")
 
     hint, _ = pipeline_mod.build_hint(
         [sys_msg("s")], {}, creds,
         fetch_fn=lambda url, timeout: {"agent_status": {"state": "tool"}},
     )
-    assert hint.agent_status.state == "pause"
-    assert hint.session.state == "pause"
-    assert [edit.type for edit in hint.context_management.edits] == ["offload"]
-    assert hint.context_management.edits[0].target == "session"
+    assert hint.agent_status.state == "pause"  # tolerated superset field
+    assert hint.session.state == "append"
+    assert hint.context_management is None
 
     hint, _ = pipeline_mod.build_hint(
         [sys_msg("s")], {}, creds,
         fetch_fn=lambda url, timeout: {"agent_status": {"state": "resume"}},
     )
-    assert hint.session.state == "resume"
-    assert [edit.type for edit in hint.context_management.edits] == ["prefetch"]
+    assert hint.agent_status.state == "resume"
+    assert hint.session.state == "append"
+    assert hint.context_management is None
 
 
-def test_session_state_compact_after_prefix_rewrite():
+def test_prefix_rewrite_bumps_epoch_instead_of_inlining_compact():
     long_system = "rewrite block " * 120
     base = [sys_msg(long_system), msg("user", "one"), msg("user", "two")]
     hint, _ = pipeline_mod.build_hint(base, {}, dict(CREDS_BASE), user="sess-rewrite")
     assert hint.session.state == "append"
+    assert hint.session.epoch is None
 
     shrunk = [sys_msg(long_system), msg("user", "one")]
     hint, _ = pipeline_mod.build_hint(shrunk, {}, dict(CREDS_BASE), user="sess-rewrite")
-    assert hint.session.state == "compact"
-    assert [edit.type for edit in hint.context_management.edits] == ["evict"]
+    assert hint.session.state == "append"  # lifecycle verbs are manage-only
+    assert hint.session.epoch == 1
+    assert hint.context_management is None
     assert hint.cache_control is None  # the guide says "don't declare" after a rewrite
 
     again = [sys_msg(long_system), msg("user", "one"), msg("user", "three")]
     hint, _ = pipeline_mod.build_hint(again, {}, dict(CREDS_BASE), user="sess-rewrite")
-    assert hint.session.state == "append"  # the rewrite edge is one-shot
+    assert hint.session.state == "append"
+    assert hint.session.epoch == 1  # the rewrite edge is one-shot
+    assert hint.cache_control is not None
+
+
+def test_manage_hint_shape_for_consumers_and_tests():
+    hint = hint_mod.build_manage_hint(
+        session_id="s-7f3a2c", state="pause", call_index=5, epoch=1
+    )
+    assert hint.context_management.manage_request is True
+    assert [edit.type for edit in hint.context_management.edits] == ["offload"]
+    assert hint.context_management.edits[0].target == "session"
+    assert hint.session.state == "pause"
+    assert hint.priority_control is None

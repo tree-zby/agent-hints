@@ -49,9 +49,9 @@ cache_policy_mod = importlib.import_module("agent_hints_pkg.cache_policy")
 def _reset_prefix_fingerprints():
     """The prefix fingerprint table is process-global (a compaction signal).
 
-    Every request now consults it -- both the cache rules and
-    ``session.state == "compact"`` -- so a test that leaves a fingerprint
-    behind would silently change the next test's state.
+    Every request consults it -- both the cache rules and the per-prefix
+    ``session.epoch`` bump -- so a test that leaves a fingerprint behind would
+    silently change the next test's state.
     """
     cache_policy_mod.reset_prefix_tracking()
     yield

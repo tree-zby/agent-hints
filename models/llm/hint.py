@@ -8,17 +8,23 @@ the model request body keeps its original format (nvext.agent_hints is a
 separate, Dynamo-compatible projection produced by the pipeline, not part of
 this schema).
 
-Four blocks are required on every request (missing = non-compliant; extra
-fields are allowed and ignored):
+The v1 protocol splits requests into three kinds (protocol §1.2/§5):
 
-  session             identity + per-request lifecycle summary
-  context_management  whether this is a management request, plus context edits
-  priority_control    canonical location of the soft priority block
-  cache_control       one ephemeral retention declaration, never an array
+  ordinary request    session + priority_control (+ cache_control when qualified)
+  auxiliary request   no hint at all (suppressed by `purpose=`)
+  manage request      session + context_management (lifecycle verb)
+
+This model provider only ever prepares requests the agent was already going
+to send, so it emits **ordinary** hints: `context_management` is deliberately
+absent, and `session.state` is restricted to `start` / `append`. Lifecycle
+verbs (`pause` / `resume` / `stop` / `compact`) belong on separate manage
+requests, which need a lifecycle trigger this plugin does not have (L1
+degradation, protocol §12.4). The `ContextManagement` model is still defined
+so manage hints decode/validate correctly.
 
 `priority` (top-level) stays as a compatibility mirror of
 `priority_control.priority`, and `agent_status` keeps carrying the 4-value
-lifecycle word used by the event channel.
+lifecycle word used by the event channel (a tolerated superset field).
 
 See docs/SCHEMA.md for the full field reference.
 """
@@ -84,19 +90,29 @@ class PriorityControl(BaseModel):
 
 class ContextEdit(BaseModel):
     type: Literal["offload", "prefetch", "evict"]
-    target: Literal["session", "messages", "tools"] = "session"
+    # v1 only allows `session` (protocol §5.3); message/tool ranges are later.
+    target: Literal["session"] = "session"
 
 
 class ContextManagement(BaseModel):
-    """Whether this is a pure context-management request, plus its edits.
+    """The manage-request block (protocol §5.3).
 
-    This plugin only builds requests that the agent was going to send anyway,
-    so `manage_request` is always the string ``"false"``; the edits describe
-    context intent attached to the request.
+    Present **only** on manage requests: `manage_request` is the JSON boolean
+    ``true`` and v1 carries exactly one explicit edit. Ordinary requests must
+    omit the whole block, so this plugin never sets it on the wire.
     """
 
-    manage_request: Literal["true", "false"] = "false"
-    edits: list[ContextEdit] = Field(default_factory=list)
+    manage_request: Literal[True] = True
+    edits: list[ContextEdit] = Field(..., min_length=1, max_length=1)
+
+
+#: Fixed verb -> edit mapping (protocol §8.2).
+MANAGE_EDITS = {
+    "pause": "offload",
+    "resume": "prefetch",
+    "stop": "evict",
+    "compact": "evict",
+}
 
 
 class HintRange(BaseModel):
@@ -144,13 +160,43 @@ class PredictionHint(BaseModel):
 
 class AgentHint(BaseModel):
     session: SessionHint
-    context_management: ContextManagement
+    # Manage requests only; ordinary requests omit the block (protocol §5.3).
+    context_management: Optional[ContextManagement] = None
     agent_status: Optional[AgentStatusHint] = None
     priority: Optional[PriorityHint] = None
     priority_control: Optional[PriorityControl] = None
     strict_priority: Optional[PriorityHint] = None
     cache_control: Optional[CacheControlHint] = None
     prediction: Optional[PredictionHint] = None
+
+
+def build_manage_hint(
+    *,
+    session_id: str,
+    state: Literal["pause", "resume", "stop", "compact"],
+    call_index: Optional[int] = None,
+    epoch: Optional[int] = None,
+    parent_session_id: Optional[str] = None,
+) -> AgentHint:
+    """Build one manage hint (session + context_management only).
+
+    ``epoch`` is the epoch the edit applies to; a ``compact`` manage request
+    carries the **old** epoch (protocol §6.3). This plugin has no lifecycle
+    trigger to send one, but the builder pins the wire shape for consumers and
+    for the shared golden vectors.
+    """
+    return AgentHint(
+        session=SessionHint(
+            session_id=session_id,
+            parent_session_id=parent_session_id,
+            call_index=call_index,
+            epoch=epoch,
+            state=state,
+        ),
+        context_management=ContextManagement(
+            edits=[ContextEdit(type=MANAGE_EDITS[state])]
+        ),
+    )
 
 
 def _wire_dict(hint: AgentHint) -> dict:

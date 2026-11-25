@@ -8,8 +8,8 @@ planning.
 ## The contract: X-Agent-Hint (full schema)
 
 Every request carries an `X-Agent-Hint` HTTP header — the AgentHint object
-serialized as UTF-8 JSON and encoded as base64url — with the **complete
-agreed cross-harness schema**:
+serialized as UTF-8 JSON and encoded as base64url — with the agreed
+**ordinary-request** profile:
 
 ```jsonc
 {
@@ -20,16 +20,12 @@ agreed cross-harness schema**:
     "agent_type": "…",                     // role / step identity
     "call_index": 1,                       // per-session call ordinal
     "epoch": 0,                            // context version
-    "state": "start|pause|resume|compact|append"
-  },
-  "context_management": {                  // required
-    "manage_request": "false",
-    "edits": []                            // offload / prefetch / evict from state
+    "state": "start|append"                // ordinary requests only
   },
   "priority":         { "level": 3, "reason": "user_waiting" },
   "priority_control": { "priority": { "level": 3, "reason": "user_waiting" } },  // required
   "strict_priority":  { "level": 1, "reason": "…" },   // control plane only
-  "cache_control": {                       // required, single object
+  "cache_control": {                       // when qualified, single object
     "type": "ephemeral", "ttl_s": 240, "msg_offset": 1,
     "range": { "end": 1, "unit": "message" }             // msg_offset == range.end
   },
@@ -43,11 +39,18 @@ agreed cross-harness schema**:
 }
 ```
 
-`session`, `context_management`, `priority_control` and `cache_control` are the
-required blocks; the rest is derived from whatever the sources actually know
-(nothing is fabricated). `session.state` summarizes the request
-(`start / pause / resume / compact / append`; `stop` stays on the lifecycle
-channel) and `context_management.edits` expands from it.
+`session` and `priority_control` are required on every main-line request;
+`cache_control` is present only when a retention declaration qualifies. The
+rest is derived from whatever the sources actually know (nothing is
+fabricated). `session.state` is `start` (a known root first call) or `append`
+(everything else); a committed context rewrite is signalled by `epoch + 1`
+and a one-round cache suppression.
+
+**Lifecycle verbs are not inlined.** `pause` / `resume` / `stop` / `compact`
+and the `context_management` block belong on separate *manage* requests
+(protocol §1.2/§5.3). This model provider has no lifecycle trigger, so it
+implements the L1 profile: ordinary requests only, with manage-level behaviour
+left to a harness that owns the session (protocol §12.4).
 
 Field-by-field reference and data-source matrix:
 **[docs/SCHEMA.md](docs/SCHEMA.md)**. Detailed lifecycle events (`running /
